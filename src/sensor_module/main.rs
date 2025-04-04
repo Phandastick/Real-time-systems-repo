@@ -1,6 +1,6 @@
 use std::{thread::sleep, time::Duration};
 
-pub async fn sensor_start() {
+pub fn sensor_start() {
     print!("Sensor module started\n");
 
     for _ in 1..10 {
