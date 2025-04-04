@@ -2,8 +2,8 @@ mod actuator_module;
 mod data_structure;
 mod sensor_module;
 
-fn main() {
-    sensor_module::main::sensor_start();
-    actuator_module::main::actuator_start();
-    println!("helo")
+#[tokio::main]
+async fn main() {
+    let _promise = sensor_module::main::sensor_start();
+    let _promise2 = actuator_module::main::actuator_start();
 }
