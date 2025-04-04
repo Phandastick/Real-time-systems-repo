@@ -1,3 +1,4 @@
+mod actuator_module;
 mod data_structure;
 mod sensor_module;
 

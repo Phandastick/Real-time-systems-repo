@@ -1,4 +1,4 @@
-use data_structure::{SensorArmData, WristData, ShoulderData, ElbowData};
+use crate::data_structure::{ElbowData, SensorArmData, ShoulderData, WristData};
 
 pub fn sensor() {
     //Arm will start out at a bent 90 degree angle
