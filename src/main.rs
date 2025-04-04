@@ -1,4 +1,6 @@
+mod sensor_module;
+mod data_structure;
+
 fn main() {
-    println!("Hello, world!");
-    print!(";gh");
+    sensor_module::main::sensor_start();
 }
