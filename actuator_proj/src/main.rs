@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
+mod data_structure;
+mod test;
+
 use std::{thread::sleep, time::Duration};
 
 fn main() {
     println!("Actuator starting...");
-    for _ in 1..10 {
-        sleep(Duration::from_millis(100));
-        println!("Actuator says hi");
-    }
+
+    test::start();
 }
