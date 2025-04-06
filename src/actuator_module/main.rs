@@ -1,4 +1,11 @@
+#![allow(dead_code)]
+
+use std::{thread::sleep, time::Duration};
+
 pub fn actuator_start() {
-    println!("hello world");
-    println!("Actuator module started\n");
+    println!("Actuator starting...");
+    for _ in 1..10 {
+        sleep(Duration::from_millis(100));
+        println!("Actuator says hi");
+    }
 }
