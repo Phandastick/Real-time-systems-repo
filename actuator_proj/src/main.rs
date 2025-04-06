@@ -2,7 +2,7 @@
 
 use std::{thread::sleep, time::Duration};
 
-pub fn actuator_start() {
+fn main() {
     println!("Actuator starting...");
     for _ in 1..10 {
         sleep(Duration::from_millis(100));

@@ -1,6 +1,6 @@
-use crate::sensor_module::sensor;
+mod sensor;
 
-pub async fn sensor_start(){
+pub fn main() {
     print!("Sensor module started\n");
     sensor::force_sensor();
 }
