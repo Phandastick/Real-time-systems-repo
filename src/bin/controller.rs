@@ -1,10 +1,17 @@
 use lapin::{options::*, BasicProperties, Connection, ConnectionProperties};
 use rand::random;
-use Real_time_systems_repo::data_structure::*;
 use serde_json;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use Real_time_systems_repo::data_structure::*;
 
 const WINDOW_SIZE: usize = 5;
+
+fn now_micros() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+}
 
 #[derive(Debug)]
 struct MovingAverage {
@@ -97,6 +104,7 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
             elbow_y: random::<f32>(),
             elbow_z: random::<f32>(),
         },
+        timestamp: now_micros(),
     }
 }
 

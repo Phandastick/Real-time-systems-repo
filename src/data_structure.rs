@@ -4,6 +4,7 @@ pub struct SensorArmData {
     pub wrist: WristData,
     pub joints: ShoulderData,
     pub elbow: ElbowData,
+    pub timestamp: u128,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

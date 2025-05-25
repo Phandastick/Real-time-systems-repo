@@ -3,6 +3,13 @@ name = "Real-time-systems-repo"
 version = "0.1.0"
 edition = "2021" 
 
+[dev-dependencies]
+criterion = { version = "0.6.0", features = ["html_reports"] }
+
+[[bench]]
+name = "latency_bench"
+harness = false
+
 [dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
 get_user_input = "0.1.1"
