@@ -53,8 +53,7 @@ async fn consume_sensor_data(channel: Channel) {
         )
         .await
         .expect("Basic consume error");
-
-    // let mut latencies = Vec::new();
+    let mut latencies = Vec::new();
 
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
@@ -85,6 +84,22 @@ async fn consume_sensor_data(channel: Channel) {
             eprintln!("ATTENTION!!! Latency > 1ms: {} μs", latency_us);
         } else {
             println!("Latency: {} μs", latency_us);
+        }
+
+        latencies.push(latency_us);
+
+        // Optional: Print stats every 20 messages
+        if latencies.len() % 20 == 0 {
+            let min = *latencies.iter().min().unwrap();
+            let max = *latencies.iter().max().unwrap();
+            let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
+            println!(
+                "Latency over {} msgs: min={}μs max={}μs avg={:.2}μs",
+                latencies.len(),
+                min,
+                max,
+                avg
+            );
         }
 
         // Process the sensor data

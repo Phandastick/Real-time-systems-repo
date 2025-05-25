@@ -195,5 +195,10 @@ async fn main() {
         if elapsed < Duration::from_millis(5) {
             tokio::time::sleep(Duration::from_millis(5) - elapsed).await;
         }
+
+        if cycle > 10000 {
+            println!("Stopping after {} cycles.", cycle);
+            break;
+        }
     }
 }
