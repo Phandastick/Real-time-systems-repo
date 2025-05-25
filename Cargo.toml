@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021" 
 
 [dev-dependencies]
-criterion = { version = "0.6.0", features = ["html_reports"] }
+criterion = { version = "0.6.0", features = ["async"] }
 
 [[bench]]
-name = "latency_bench"
+name = "actuator_transmission_bench"
 harness = false
 
 [dependencies]

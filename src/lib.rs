@@ -1,6 +1,6 @@
+#![allow(unused_imports)]
 pub mod actuator;
 pub mod data_structure;
-
 use data_structure::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,19 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod controller;
 
 pub use actuator::simulate_actuator;
-pub use controller::simulate_controller;
+// pub use controller::simulate_controller;
 
 pub fn now_micros() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_micros()
-}
-
-//can edit this however u want to simulate sending data to actuator for benching
-pub fn simulate_controller_data() -> SensorArmData {
-    // link this to start transmiting data
-    let mut data = SensorArmData::start();
-    data.timestamp = now_micros();
-    data
 }
