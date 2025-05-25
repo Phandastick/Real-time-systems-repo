@@ -2,14 +2,9 @@ use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
-use Real_time_systems_repo::data_structure::*;
+use Real_time_systems_repo::{data_structure::*, lib::now_micros};
 
-fn now_micros() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros()
-}
+const DEADLINE_US: u128 = 1000; // 1 ms deadline
 
 #[tokio::main]
 async fn main() {
@@ -21,11 +16,11 @@ async fn main() {
     // Create a channel
     let channel = conn.create_channel().await.expect("Channel creation error");
 
-    // // limit batching and buffering latency
-    // channel
-    //     .basic_qos(1, BasicQosOptions::default())
-    //     .await
-    //     .expect("Failed to set QoS");
+    // limit batching and buffering latency
+    channel
+        .basic_qos(1, BasicQosOptions::default())
+        .await
+        .expect("Failed to set QoS");
 
     // Declare the queue (must match the producer queue name)
     channel
@@ -39,7 +34,6 @@ async fn main() {
 
     println!("> Actuator is ready to receive sensor data...");
 
-    // Start consuming messages
     consume_sensor_data(channel).await;
 }
 
@@ -53,7 +47,10 @@ async fn consume_sensor_data(channel: Channel) {
         )
         .await
         .expect("Basic consume error");
+
     let mut latencies = Vec::new();
+    let mut total_msgs = 0u64;
+    let mut missed_deadlines = 0u64;
 
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
@@ -78,34 +75,40 @@ async fn consume_sensor_data(channel: Channel) {
                 continue;
             }
         };
+		// {
+		// 	let latency_us = now_micros() - sensor_data.timestamp;
+		// 	total_msgs += 1;
+	
+		// 	// log missed deadlines
+		// 	if latency_us > DEADLINE_US {
+		// 		missed_deadlines += 1;
+		// 		eprintln!(
+		// 			"ATTENTION!!! Latency > {} μs: {} μs",
+		// 			DEADLINE_US, latency_us
+		// 		);
+		// 	} else {
+		// 		println!("Latency: {} μs", latency_us);
+		// 	}
+	
+		// 	latencies.push(latency_us);
+	
+		// 	if total_msgs % 20 == 0 {
+		// 		let min = *latencies.iter().min().unwrap();
+		// 		let max = *latencies.iter().max().unwrap();
+		// 		let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
+		// 		let missed_ratio = missed_deadlines as f64 / total_msgs as f64 * 100.0;
+		// 		println!(
+		// 			"Latency over {} msgs: min={}μs max={}μs avg={:.2}μs missed_deadline_ratio={:.2}%",
+		// 			total_msgs, min, max, avg, missed_ratio
+		// 		);
+		// 	}
+		}
 
-        let latency_us = now_micros() - sensor_data.timestamp;
-        if latency_us > 1000 {
-            eprintln!("ATTENTION!!! Latency > 1ms: {} μs", latency_us);
-        } else {
-            println!("Latency: {} μs", latency_us);
-        }
-
-        latencies.push(latency_us);
-
-        // Optional: Print stats every 20 messages
-        if latencies.len() % 20 == 0 {
-            let min = *latencies.iter().min().unwrap();
-            let max = *latencies.iter().max().unwrap();
-            let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
-            println!(
-                "Latency over {} msgs: min={}μs max={}μs avg={:.2}μs",
-                latencies.len(),
-                min,
-                max,
-                avg
-            );
-        }
+        
 
         // Process the sensor data
         control_arm(sensor_data);
 
-        // Acknowledge message
         delivery
             .ack(Default::default())
             .await
@@ -114,6 +117,5 @@ async fn consume_sensor_data(channel: Channel) {
 }
 
 fn control_arm(data: SensorArmData) {
-    // Stub for your control logic (PID, predictive controller, etc)
     println!("Executing control for sensor data: {:?}", data);
 }

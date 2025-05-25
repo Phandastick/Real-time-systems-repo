@@ -1,81 +1,29 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use rand::rng;
-use std::hint::black_box;
-use std::time::{Duration, Instant};
-use Real_time_systems_repo::{simulate_actuator_response, simulate_controller_data}; // Update with actual module paths
+// benches/rabbitmq_latency.rs
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use lapin::{Connection, ConnectionProperties};
+use tokio::runtime::Runtime;
+use Real_time_systems_repo::{simulate_actuator, simulate_controller};
 
-fn benchmark_latency(c: &mut Criterion) {
-    c.bench_function("latency", |b| {
-        b.iter(|| {
-            let rng = rng();
-            let send_time = Instant::now();
+fn latency_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
 
-            // Simulate controller sending data with timestamp
-            let data = simulate_controller_data(send_time);
+    c.bench_function(BenchmarkId::new("Data reception latency", 100), |b| {
+        b.to_async(&rt).iter_custom(|_| async {
+            let conn =
+                Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
+                    .await
+                    .expect("Connection error");
 
-            // Simulate actuator processing and reading timestamp
-            let recv_time = simulate_actuator_response(black_box(data));
+            let channel = conn.create_channel().await.expect("Channel error");
 
-            // Latency calculation
-            let latency = recv_time.duration_since(send_time);
-            black_box(latency);
+            let consumer_handle = tokio::spawn(simulate_actuator(channel.clone(), 100));
+            simulate_controller(100, channel.clone()).await;
+            let _ = consumer_handle.await.unwrap();
+
+            std::time::Duration::from_secs(1)
         });
     });
 }
 
-fn benchmark_throughput(c: &mut Criterion) {
-    c.bench_function("throughput", |b| {
-        b.iter(|| {
-            let mut count = 0;
-            let start = Instant::now();
-            let duration = Duration::from_secs(1); // 1 second window
-
-            while Instant::now().duration_since(start) < duration {
-                let data = simulate_controller_data(Instant::now());
-                simulate_actuator_response(black_box(data));
-                count += 1;
-            }
-
-            let throughput = count as f64 / duration.as_secs_f64();
-            black_box(throughput);
-        });
-    });
-}
-
-fn benchmark_jitter(c: &mut Criterion) {
-    c.bench_function("jitter", |b| {
-        b.iter(|| {
-            let mut latencies = vec![];
-
-            for _ in 0..100 {
-                let send_time = Instant::now();
-                let data = simulate_controller_data(send_time);
-                let recv_time = simulate_actuator_response(black_box(data));
-                let latency = recv_time.duration_since(send_time);
-                latencies.push(latency);
-            }
-
-            // Calculate jitter as standard deviation
-            let avg =
-                latencies.iter().map(|d| d.as_secs_f64()).sum::<f64>() / latencies.len() as f64;
-            let jitter = latencies
-                .iter()
-                .map(|d| {
-                    let diff = d.as_secs_f64() - avg;
-                    diff * diff
-                })
-                .sum::<f64>()
-                / latencies.len() as f64;
-
-            black_box(jitter.sqrt());
-        });
-    });
-}
-
-criterion_group!(
-    benches,
-    benchmark_latency,
-    benchmark_throughput,
-    benchmark_jitter
-);
+criterion_group!(benches, latency_benchmark);
 criterion_main!(benches);

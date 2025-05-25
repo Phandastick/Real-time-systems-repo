@@ -157,6 +157,12 @@ async fn main() {
         .await
         .expect("Queue declaration error");
 
+    // limit batching and buffering latency
+    channel
+        .basic_qos(1, BasicQosOptions::default())
+        .await
+        .expect("Failed to set QoS");
+
     let mut filters = Filters::new();
 
     let mut cycle: u64 = 0;
