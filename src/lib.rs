@@ -16,11 +16,3 @@ pub fn now_micros() -> u128 {
         .unwrap()
         .as_micros()
 }
-
-//can edit this however u want to simulate sending data to actuator for benching
-// pub fn simulate_controller_data() -> SensorArmData {
-// 		link this to start transmiting data
-// 		let mut data = SensorArmData::start();
-//     data.timestamp = now_micros();
-//     data
-// }
