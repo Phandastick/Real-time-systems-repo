@@ -1,6 +1,6 @@
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use futures_util::stream::StreamExt;
-use real_time_systems_repo::data_structure::*;
+use Real_time_systems_repo::data_structure::*;
 use serde_json;
 
 #[tokio::main]

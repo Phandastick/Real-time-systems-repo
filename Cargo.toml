@@ -1,5 +1,5 @@
 [package]
-name = "real-time-systems-repo"
+name = "Real-time-systems-repo"
 version = "0.1.0"
 edition = "2021" 
 
@@ -13,3 +13,4 @@ futures-util = "0.3.31"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 rand = "0.9.1"
+criterion = "0.6.0"

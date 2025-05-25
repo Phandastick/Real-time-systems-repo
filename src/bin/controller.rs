@@ -1,6 +1,6 @@
 use lapin::{options::*, BasicProperties, Connection, ConnectionProperties};
 use rand::random;
-use real_time_systems_repo::data_structure::*;
+use Real_time_systems_repo::data_structure::*;
 use serde_json;
 use std::time::{Instant, Duration};
 
