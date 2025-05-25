@@ -1,3 +1,4 @@
+#![allow(unused_imports, unused_variables, unused_mut)]
 use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
@@ -15,7 +16,6 @@ async fn main() {
 
     // Create a channel
     let channel = conn.create_channel().await.expect("Channel creation error");
-
     // limit batching and buffering latency
     channel
         .basic_qos(1, BasicQosOptions::default())
@@ -48,7 +48,7 @@ async fn consume_sensor_data(channel: Channel) {
         .await
         .expect("Basic consume error");
 
-    let mut latencies = Vec::new();
+    // let mut latencies = Vec::new();
     let mut total_msgs = 0u64;
     let mut missed_deadlines = 0u64;
 
@@ -75,36 +75,34 @@ async fn consume_sensor_data(channel: Channel) {
                 continue;
             }
         };
-		// {
-		// 	let latency_us = now_micros() - sensor_data.timestamp;
-		// 	total_msgs += 1;
-	
-		// 	// log missed deadlines
-		// 	if latency_us > DEADLINE_US {
-		// 		missed_deadlines += 1;
-		// 		eprintln!(
-		// 			"ATTENTION!!! Latency > {} μs: {} μs",
-		// 			DEADLINE_US, latency_us
-		// 		);
-		// 	} else {
-		// 		println!("Latency: {} μs", latency_us);
-		// 	}
-	
-		// 	latencies.push(latency_us);
-	
-		// 	if total_msgs % 20 == 0 {
-		// 		let min = *latencies.iter().min().unwrap();
-		// 		let max = *latencies.iter().max().unwrap();
-		// 		let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
-		// 		let missed_ratio = missed_deadlines as f64 / total_msgs as f64 * 100.0;
-		// 		println!(
-		// 			"Latency over {} msgs: min={}μs max={}μs avg={:.2}μs missed_deadline_ratio={:.2}%",
-		// 			total_msgs, min, max, avg, missed_ratio
-		// 		);
-		// 	}
-		}
+        { // Uncommented: manual logging data reception
+             // let latency_us = now_micros() - sensor_data.timestamp;
+             // total_msgs += 1;
 
-        
+            // // log missed deadlines
+            // if latency_us > DEADLINE_US {
+            // 	missed_deadlines += 1;
+            // 	eprintln!(
+            // 		"ATTENTION!!! Latency > {} μs: {} μs",
+            // 		DEADLINE_US, latency_us
+            // 	);
+            // } else {
+            // 	println!("Latency: {} μs", latency_us);
+            // }
+
+            // latencies.push(latency_us);
+
+            // if total_msgs % 20 == 0 {
+            // 	let min = *latencies.iter().min().unwrap();
+            // 	let max = *latencies.iter().max().unwrap();
+            // 	let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
+            // 	let missed_ratio = missed_deadlines as f64 / total_msgs as f64 * 100.0;
+            // 	println!(
+            // 		"Latency over {} msgs: min={}μs max={}μs avg={:.2}μs missed_deadline_ratio={:.2}%",
+            // 		total_msgs, min, max, avg, missed_ratio
+            // 	);
+            // }
+        }
 
         // Process the sensor data
         control_arm(sensor_data);
