@@ -3,6 +3,7 @@ use crate::data_structure::*;
 use futures_util::stream::StreamExt;
 use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
+use rand::Rng;
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,6 +44,8 @@ fn now_micros() -> u128 {
 }
 
 pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
+    let mut rng = rand::rng();
+
     let mut consumer: Consumer = channel
         .basic_consume(
             "sensor_data",
@@ -86,9 +89,9 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
 
         send_feedback(
             &channel,
-            sensor_data.actuator_id,
+            rng.random::<u32>(),
             "Processed",
-            sensor_data.force_data,
+            rng.random::<f64>(),
         )
         .await;
     }
