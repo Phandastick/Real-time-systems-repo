@@ -1,10 +1,10 @@
 #![allow(unused_imports, unused_variables, unused_mut)]
 use futures_util::stream::StreamExt;
+use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use Real_time_systems_repo::{data_structure::*, now_micros};
-use lapin::BasicProperties;
 
 #[tokio::main]
 async fn main() {
@@ -106,7 +106,6 @@ async fn consume_sensor_data(channel: Channel) {
         // Process the sensor data
         control_arm(&channel, sensor_data).await;
 
-
         delivery
             .ack(Default::default())
             .await
@@ -115,30 +114,17 @@ async fn consume_sensor_data(channel: Channel) {
 }
 
 async fn control_arm(channel: &Channel, data: SensorArmData) {
-    println!("Executing control for sensor data: {:?}", data);
-    
-    let status = if data.force_data > 10.0 {
-        "force_high"
-    } else {
-        "nominal"
-    };
+    println!("Current angle: {:?}", data.object_angle);
 
-    let adjustment = if data.force_data > 10.0 {
-        -0.3
-    } else {
-        0.2
-    };
-
-    send_feedback(channel, status, adjustment).await;
+    send_feedback(channel, sensor_arm_data).await;
 }
 
-
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
+pub async fn send_feedback(channel: &Channel, arm_data: SensorArmData) {
     let feedback = FeedbackData {
-        status: status.to_string(),
-        adjustment_value: adjustment,
-        timestamp: now_micros(),
+        wrist: arm_data.WristData,
+        shoulder: arm_data.ShoulderData,
+        elbow: arm_data.ElbowData,
     };
 
     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
