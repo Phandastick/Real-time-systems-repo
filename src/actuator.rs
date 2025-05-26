@@ -11,19 +11,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub async fn start() {
     println!("> Actuator is ready to receive sensor data...");
 
-    let mut stamping_data = StampingData::new(0.8, 10, 5);
     let mut channel = init_channel().await;
 
     let (tx, rx) = tokio::sync::mpsc::channel(100);
     //thread 1 - receiving data
-    simulate_actuator(channel, &mut stamping_data).await;
+    simulate_actuator(channel).await;
 
     //thread 2 - calculate reception latency
     start_latency();
 }
 
-// This version accepts a mutable StampingData reference
-pub async fn init_channel() -> Channel {
+//#region communications
+async fn init_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -48,7 +47,7 @@ pub async fn init_channel() -> Channel {
     channel
 }
 
-async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
+async fn simulate_actuator(channel: Channel) {
     let mut rng = rand::rng();
     // let mut latencies = Vec::new();
 
@@ -66,7 +65,7 @@ async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
         let delivery = match delivery {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Consumer stream error: {:?}", e);
+                eprintln!("Actuator> Consumer stream error: {:?}", e);
                 continue;
             }
         };
@@ -76,7 +75,7 @@ async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
         let sensor_data: SensorData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Failed to deserialize sensor data: {:?}", e);
+                eprintln!("Actuator> Failed to deserialize sensor data: {:?}", e);
                 delivery
                     .nack(Default::default())
                     .await
@@ -86,7 +85,7 @@ async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
         };
 
         // Update the stamping state
-        control_arm(stamping_data, sensor_data).await;
+        control_arm(sensor_data).await;
 
         delivery
             .ack(Default::default())
@@ -98,7 +97,7 @@ async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
 }
 
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
+async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
     let feedback = FeedbackData {
         status: status.to_string(),
         adjustment_value: adjustment,
@@ -121,21 +120,24 @@ pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
         .await
         .expect("Failed to confirm feedback delivery");
 
-    println!("> Sent feedback to sensor: {:?}", feedback);
+    // println!("> Sent feedback to sensor: {:?}", feedback);
 }
+//#endregion
 
-// #region Control logic
-// Control logic that receives deserialized sensor data and updates system state
-pub async fn control_arm(stamping_data: &mut StampingData, sensor_data: SensorData) {
-    stamping_data.update_sensor_data(sensor_data.position, sensor_data.velocity);
+//#region Control logic
+fn control_arm(sensor_data: SensorData) -> FeedbackData {
+    let mut rng = rand::rng();
 
-    // Optionally log or simulate behavior based on updated state
-    println!(
-        "Updated StampingData: pos = {:.3}, vel = {:.3}",
-        stamping_data.current_position, stamping_data.current_velocity
-    );
+    // Generate random effectiveness between 60% and 95%
+    let effectiveness = rng.random_range(0.60..=0.95);
 
-    // You can add more predictive or feedback logic here
+    let remaining_offset_x = sensor_data.offset_x * (1.0 - effectiveness);
+    let remaining_offset_y = sensor_data.offset_y * (1.0 - effectiveness);
+
+    FeedbackData {
+        remaining_offset_x,
+        remaining_offset_y,
+    }
 }
 
 //#endregion

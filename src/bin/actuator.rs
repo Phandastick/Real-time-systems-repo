@@ -1,14 +1,29 @@
 #![allow(unused_variables)]
+use crate::{data_structure::*, now_micros};
 use futures_util::stream::StreamExt;
 use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use rand::Rng;
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
-use Real_time_systems_repo::{data_structure::*, now_micros};
 
-#[tokio::main]
-async fn main() {
+//start function
+pub async fn start() {
+    println!("> Actuator is ready to receive sensor data...");
+
+    let mut stamping_data = StampingData::new(0.8);
+    let mut channel = init_channel().await;
+
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    //thread 1 - receiving data
+    simulate_actuator(channel, &mut stamping_data).await;
+
+    //thread 2 - calculate reception latency
+    start_latency();
+}
+
+//#region communications
+async fn init_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -30,14 +45,12 @@ async fn main() {
         )
         .await
         .expect("Queue declaration error");
-
-    println!("> Actuator is ready to receive sensor data...");
-
-    let latencies = simulate_actuator(channel).await;
+    channel
 }
 
-pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
+async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
     let mut rng = rand::rng();
+    // let mut latencies = Vec::new();
 
     let mut consumer: Consumer = channel
         .basic_consume(
@@ -49,24 +62,21 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
         .await
         .expect("Basic consume error");
 
-    let mut latencies = Vec::new();
-
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Consumer stream error: {:?}", e);
+                eprintln!("Actuator> Consumer stream error: {:?}", e);
                 continue;
             }
         };
 
         let payload = &delivery.data;
 
-        // handle deserialize errors
-        let sensor_data: SensorArmData = match serde_json::from_slice(payload) {
+        let sensor_data: SensorData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Failed to deserialize sensor data: {:?}", e);
+                eprintln!("Actuator> Failed to deserialize sensor data: {:?}", e);
                 delivery
                     .nack(Default::default())
                     .await
@@ -74,61 +84,21 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
                 continue;
             }
         };
-        { // Uncommented: manual logging data reception
-             // let latency_us = now_micros() - sensor_data.timestamp;
-             // total_msgs += 1;
 
-            // // log missed deadlines
-            // if latency_us > DEADLINE_US {
-            // 	missed_deadlines += 1;
-            // 	eprintln!(
-            // 		"ATTENTION!!! Latency > {} μs: {} μs",
-            // 		DEADLINE_US, latency_us
-            // 	);
-            // } else {
-            // 	println!("Latency: {} μs", latency_us);
-            // }
-
-            // latencies.push(latency_us);
-
-            // if total_msgs % 20 == 0 {
-            // 	let min = *latencies.iter().min().unwrap();
-            // 	let max = *latencies.iter().max().unwrap();
-            // 	let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
-            // 	let missed_ratio = missed_deadlines as f64 / total_msgs as f64 * 100.0;
-            // 	println!(
-            // 		"Latency over {} msgs: min={}μs max={}μs avg={:.2}μs missed_deadline_ratio={:.2}%",
-            // 		total_msgs, min, max, avg, missed_ratio
-            // 	);
-            // }
-        }
-
-        // Process the sensor data
-        control_arm(&channel, sensor_data).await;
+        // Update the stamping state
+        control_arm(stamping_data, sensor_data).await;
 
         delivery
             .ack(Default::default())
             .await
             .expect("Failed to ack");
+
+        send_feedback(&channel, "Processed", rng.random::<f64>()).await;
     }
 }
 
-async fn control_arm(channel: &Channel, data: SensorArmData) {
-    println!("Executing control for sensor data: {:?}", data);
-
-    let status = if data.force_data > 10.0 {
-        "force_high"
-    } else {
-        "nominal"
-    };
-
-    let adjustment = if data.force_data > 10.0 { -0.3 } else { 0.2 };
-
-    send_feedback(channel, status, adjustment).await;
-}
-
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
+async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
     let feedback = FeedbackData {
         status: status.to_string(),
         adjustment_value: adjustment,
@@ -151,5 +121,18 @@ pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
         .await
         .expect("Failed to confirm feedback delivery");
 
-    println!("> Sent feedback to sensor: {:?}", feedback);
+    // println!("> Sent feedback to sensor: {:?}", feedback);
 }
+//#endregion
+
+//#region Control logic
+// Control logic that receives deserialized sensor data and updates system state
+async fn control_arm(stamping_data: &mut StampingData, sensor_data: SensorData) {
+    stamping_data.update_sensor_data(sensor_data.position, sensor_data.velocity);
+
+    // Optionally log or simulate behavior based on updated state
+
+    // You can add more predictive or feedback logic here
+}
+
+//#endregion
