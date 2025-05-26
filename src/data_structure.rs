@@ -1,43 +1,96 @@
-use std::time::Duration;
+use crate::now_micros;
 
-//#region sensor data structures
-// FOR SENSOR - updates data in current position and velocity
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SensorData {
-    pub offset_x: f64, // Current position offset in X
-    pub offset_y: f64, // Current position offset in Y
+pub struct SensorArmData {
+    pub object_data: ObjectData,
+
+    pub wrist: WristData,
+    pub joints: ShoulderData,
+    pub elbow: ElbowData,
+    pub arm_velocity: f32,
+    //higher speed, more strength
+    pub arm_strength: f32, // use speed to calculate force of arm
+
+    pub timestamp: u128,
 }
 
-// #region Actuator structures
-#[derive(Debug)]
-pub struct StampingData {
-    // Config
-    pub damping_gain: f64, // Damping coefficient (how strongly we respond to predicted vibration)
-
-    // Platform state
-    pub offset_x: f64, // Current actuator/arm position offset
-    pub offset_y: f64, // Current actuator/arm position offset
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ObjectData {
+    pub object_velocity: f32,
+    pub object_mass: f32,
+    pub object_size: f32,
+    pub object_distance: f32, //height from robotic arm
 }
 
-impl StampingData {
-    pub fn new(damping_gain: f64) -> Self {
-        StampingData {
-            damping_gain,
-            offset_x: 0.0,
-            offset_y: 0.0,
+//stored in sensor
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WristData {
+    pub wrist_x: f32,
+    pub wrist_y: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShoulderData {
+    pub shoulder_x: f32,
+    pub shoulder_y: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ElbowData {
+    pub elbow_x: f32,
+    pub elbow_y: f32,
+}
+
+impl SensorArmData {
+    pub fn new(object_data: ObjectData) -> Self {
+        let joints = ShoulderData {
+            shoulder_x: 0.0,
+            shoulder_y: 0.0,
+        };
+        let elbow = ElbowData {
+            elbow_x: 0.0,
+            elbow_y: 3.0,
+        };
+        let wrist = WristData {
+            wrist_x: joints.shoulder_x,
+            wrist_y: elbow.elbow_y,
+        };
+
+        let arm_velocity = 1.0;
+        let arm_strength = arm_velocity * 10.0;
+
+        SensorArmData {
+            object_data,
+            wrist,
+            joints,
+            elbow,
+            arm_velocity,
+            arm_strength,
+            timestamp: 0,
         }
     }
 }
 
-impl StampingData {
-    pub fn update_sensor_data(&mut self, offset_x: f64, offset_y: f64) {
-        self.offset_x = offset_x;
-        self.offset_y = offset_y;
+impl SensorArmData {
+    pub fn update_object_data(&mut self, object_data: ObjectData) {
+        self.object_data = object_data;
+    }
+}
+impl SensorArmData {
+    pub fn to_feedback(&self) -> FeedbackData {
+        FeedbackData {
+            wrist: self.wrist.clone(),
+            joints: self.joints.clone(),
+            elbow: self.elbow.clone(),
+            timestamp: now_micros(),
+        }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeedbackData {
-    pub remaining_offset_x: f64, // Remaining offset in X after processing
-    pub remaining_offset_y: f64, // Remaining offset in Y after processing
+    pub wrist: WristData,
+    pub joints: ShoulderData,
+    pub elbow: ElbowData,
+    pub timestamp: u128,
 }
