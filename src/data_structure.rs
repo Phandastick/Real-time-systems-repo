@@ -1,3 +1,5 @@
+use crate::now_micros;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SensorArmData {
     pub object_data: ObjectData,
@@ -37,6 +39,52 @@ pub struct ShoulderData {
 pub struct ElbowData {
     pub elbow_x: f32,
     pub elbow_y: f32,
+}
+
+impl SensorArmData {
+    pub fn new(object_data: ObjectData) -> Self {
+        let joints = ShoulderData {
+            shoulder_x: 0.0,
+            shoulder_y: 0.0,
+        };
+        let elbow = ElbowData {
+            elbow_x: 0.0,
+            elbow_y: 3.0,
+        };
+        let wrist = WristData {
+            wrist_x: joints.shoulder_x,
+            wrist_y: elbow.elbow_y,
+        };
+
+        let arm_velocity = 1.0;
+        let arm_strength = arm_velocity * 10.0;
+
+        SensorArmData {
+            object_data,
+            wrist,
+            joints,
+            elbow,
+            arm_velocity,
+            arm_strength,
+            timestamp: 0,
+        }
+    }
+}
+
+impl SensorArmData {
+    pub fn update_object_data(&mut self, object_data: ObjectData) {
+        self.object_data = object_data;
+    }
+}
+impl SensorArmData {
+    pub fn to_feedback(&self) -> FeedbackData {
+        FeedbackData {
+            wrist: self.wrist.clone(),
+            joints: self.joints.clone(),
+            elbow: self.elbow.clone(),
+            timestamp: now_micros(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
