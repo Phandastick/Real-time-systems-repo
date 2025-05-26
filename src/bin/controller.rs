@@ -146,65 +146,71 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
     (filtered, anomaly)
 }
 
-async fn consume_feedback() {
+async fn consume_feedback(shutdown: Arc<Notify>) {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
-        .await
-        .expect("Connection error");
+        .await.expect("Connection error");
 
     let channel = conn.create_channel().await.expect("Channel creation error");
 
-    channel
-        .queue_declare(
-            "feedback_to_sensor",
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        )
-        .await
-        .expect("Queue declaration error");
+    channel.queue_declare(
+        "feedback_to_sensor",
+        QueueDeclareOptions::default(),
+        FieldTable::default(),
+    ).await.expect("Queue declaration error");
 
-    let mut consumer = channel
-        .basic_consume(
-            "feedback_to_sensor",
-            "feedback_consumer",
-            BasicConsumeOptions::default(),
-            FieldTable::default(),
-        )
-        .await
-        .expect("Basic consume error");
+    let mut consumer = channel.basic_consume(
+        "feedback_to_sensor",
+        "feedback_consumer",
+        BasicConsumeOptions::default(),
+        FieldTable::default(),
+    ).await.expect("Basic consume error");
 
     println!("> Feedback consumer ready...");
 
-    while let Some(delivery) = consumer.next().await {
-        match delivery {
-            Ok(delivery) => {
-                let payload = &delivery.data;
-                let feedback: FeedbackData = match serde_json::from_slice(payload) {
-                    Ok(fb) => fb,
-                    Err(e) => {
-                        eprintln!("Failed to deserialize feedback: {:?}", e);
-                        delivery.nack(Default::default()).await.expect("Failed to nack");
-                        continue;
-                    }
-                };
+    loop {
+        tokio::select! {
+            maybe_delivery = consumer.next() => {
+                if let Some(Ok(delivery)) = maybe_delivery {
+                    let payload = &delivery.data;
+                    let feedback: FeedbackData = match serde_json::from_slice(payload) {
+                        Ok(fb) => fb,
+                        Err(e) => {
+                            eprintln!("Failed to deserialize feedback: {:?}", e);
+                            delivery.nack(Default::default()).await.expect("Failed to nack");
+                            continue;
+                        }
+                    };
 
-                println!("Received feedback: {:?}", feedback);
-                delivery.ack(Default::default()).await.expect("Failed to ack");
+                    println!("Received feedback: {:?}", feedback);
+                    delivery.ack(Default::default()).await.expect("Failed to ack");
+                } else {
+                    break; // consumer ended
+                }
             }
-            Err(e) => eprintln!("Consumer error: {:?}", e),
+            _ = shutdown.notified() => {
+                println!("Feedback consumer received shutdown signal.");
+                break;
+            }
         }
     }
+
+    println!("Feedback consumer exiting cleanly.");
 }
+
 
 #[tokio::main]
 async fn main() {
     let pool = ScheduledThreadPool::new(4);
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 10_000u64;
+    let max_cycles = 1_000u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
+    //notifiers for shutdown 
     let shutdown_notify = Arc::new(Notify::new());
     let shutdown_notify_producer = Arc::clone(&shutdown_notify);
+    let feedback_shutdown = Arc::new(Notify::new());
+    let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
 
     //publisher
     let publisher_handle = tokio::spawn(async move {
@@ -239,12 +245,12 @@ async fn main() {
         println!("Publisher task exiting cleanly.");
     });
 
-    // Async task: Feedback consumer
-    let feedback_handle = tokio::spawn(async {
-        consume_feedback().await;
+    //feedback
+    let feedback_handle = tokio::spawn(async move {
+        consume_feedback(feedback_shutdown_consumer).await;
     });
 
-    // Producer
+    //producer
     let tx_blocking = tx_processed.clone();
     let cycle_clone = Arc::clone(&cycle);
 
@@ -274,18 +280,15 @@ async fn main() {
     });
 
     println!("Producer started. Waiting for tasks to complete.");
-
-    //wait for shutdown notification
+    //shutdowns
     shutdown_notify.notified().await;
-
     println!("All cycles processed. Cleaning up...");
-
-    //wait for threads to finish
-    publisher_handle.await.expect("Publisher panicked");
-    feedback_handle.abort(); 
-
-    //drop pool 
     drop(pool);
+    drop(tx_processed);              // allow publisher to exit
+    feedback_shutdown.notify_waiters(); // allow consumer to exit
+
+    publisher_handle.await.expect("Publisher panicked");
+    feedback_handle.await.expect("Feedback panicked");
 
     println!("Shutdown complete. Exiting.");
 }
