@@ -29,9 +29,8 @@ pub struct ElbowData {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FeedbackData {
-    pub actuator_id: u32,      // 1, for wrist, 2 for shoulder, 3 for elbow
-    pub status: String,        // e.g., "ok", "error", "calibrating"
-    pub adjustment_value: f64, // Suggests how the sensor should react (e.g., calibrate)
+pub struct FeedbackData {     
+    pub status: String,        
+    pub adjustment_value: f64, 
     pub timestamp: u128,
 }

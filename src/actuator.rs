@@ -102,7 +102,6 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
 /// Simulates sending feedback from actuator to sensor.
 pub async fn send_feedback(channel: &Channel, actuator_id: u32, status: &str, adjustment: f64) {
     let feedback = FeedbackData {
-        actuator_id,
         status: status.to_string(),
         adjustment_value: adjustment,
         timestamp: now_micros(),

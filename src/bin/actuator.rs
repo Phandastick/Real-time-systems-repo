@@ -3,9 +3,8 @@ use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
-use Real_time_systems_repo::{data_structure::*, lib::now_micros};
-
-const DEADLINE_US: u128 = 1000; // 1 ms deadline
+use Real_time_systems_repo::{data_structure::*, now_micros};
+use lapin::BasicProperties;
 
 #[tokio::main]
 async fn main() {
@@ -105,7 +104,8 @@ async fn consume_sensor_data(channel: Channel) {
         }
 
         // Process the sensor data
-        control_arm(sensor_data);
+        control_arm(&channel, sensor_data).await;
+
 
         delivery
             .ack(Default::default())
@@ -114,6 +114,48 @@ async fn consume_sensor_data(channel: Channel) {
     }
 }
 
-fn control_arm(data: SensorArmData) {
+async fn control_arm(channel: &Channel, data: SensorArmData) {
     println!("Executing control for sensor data: {:?}", data);
+    
+    let status = if data.force_data > 10.0 {
+        "force_high"
+    } else {
+        "nominal"
+    };
+
+    let adjustment = if data.force_data > 10.0 {
+        -0.3
+    } else {
+        0.2
+    };
+
+    send_feedback(channel, status, adjustment).await;
+}
+
+
+/// Simulates sending feedback from actuator to sensor.
+pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
+    let feedback = FeedbackData {
+        status: status.to_string(),
+        adjustment_value: adjustment,
+        timestamp: now_micros(),
+    };
+
+    let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
+
+    // Send to feedback queue (sensor listens here)
+    channel
+        .basic_publish(
+            "",
+            "feedback_to_sensor", // Sensor should consume from this
+            BasicPublishOptions::default(),
+            &payload,
+            BasicProperties::default(),
+        )
+        .await
+        .expect("Failed to publish feedback")
+        .await
+        .expect("Failed to confirm feedback delivery");
+
+    println!("> Sent feedback to sensor: {:?}", feedback);
 }
