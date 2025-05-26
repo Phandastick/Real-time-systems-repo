@@ -41,7 +41,7 @@ pub struct ElbowData {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeedbackData {
-    pub status: String,
-    pub adjustment_value: f64,
-    pub timestamp: u128,
+    pub wrist: WristData,
+    pub joints: ShoulderData,
+    pub elbow: ElbowData,
 }
