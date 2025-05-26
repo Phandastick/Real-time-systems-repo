@@ -24,16 +24,17 @@ async fn create_channel() -> Channel {
 
     // Create a channel
     let channel = conn.create_channel().await.expect("Channel creation error");
-    // limit batching and buffering latency
+
+    // Set Quality of Service
     channel
         .basic_qos(1, BasicQosOptions::default())
         .await
         .expect("Failed to set QoS");
 
-    // Declare the queue (must match the producer queue name)
+    // Declare the queue to consume from
     channel
         .queue_declare(
-            "recieve_sensor_data",
+            "sensor_data",
             QueueDeclareOptions::default(),
             FieldTable::default(),
         )
@@ -71,7 +72,6 @@ async fn consume_sensor_data(channel: Channel) {
 
         let payload = &delivery.data;
 
-        // handle deserialize errors
         let sensor_data: SensorArmData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
@@ -83,34 +83,6 @@ async fn consume_sensor_data(channel: Channel) {
                 continue;
             }
         };
-        { // Uncommented: manual logging data reception
-             // let latency_us = now_micros() - sensor_data.timestamp;
-             // total_msgs += 1;
-
-            // // log missed deadlines
-            // if latency_us > DEADLINE_US {
-            // 	missed_deadlines += 1;
-            // 	eprintln!(
-            // 		"ATTENTION!!! Latency > {} μs: {} μs",
-            // 		DEADLINE_US, latency_us
-            // 	);
-            // } else {
-            // 	println!("Latency: {} μs", latency_us);
-            // }
-
-            // latencies.push(latency_us);
-
-            // if total_msgs % 20 == 0 {
-            // 	let min = *latencies.iter().min().unwrap();
-            // 	let max = *latencies.iter().max().unwrap();
-            // 	let avg = latencies.iter().sum::<u128>() as f64 / latencies.len() as f64;
-            // 	let missed_ratio = missed_deadlines as f64 / total_msgs as f64 * 100.0;
-            // 	println!(
-            // 		"Latency over {} msgs: min={}μs max={}μs avg={:.2}μs missed_deadline_ratio={:.2}%",
-            // 		total_msgs, min, max, avg, missed_ratio
-            // 	);
-            // }
-        }
 
         // Process the sensor data
         control_arm(&channel, sensor_data).await;
@@ -134,11 +106,10 @@ pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
 
     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
 
-    // Send to feedback queue (sensor listens here)
     channel
         .basic_publish(
             "",
-            "feedback_to_sensor", // Sensor should consume from this
+            "feedback_to_sensor", // sensor listens here
             BasicPublishOptions::default(),
             &payload,
             BasicProperties::default(),

@@ -96,3 +96,22 @@ pub struct FeedbackData {
     pub elbow: ElbowData,
     pub timestamp: u128,
 }
+
+impl SensorArmData {
+    pub fn from_feedback(feedback: FeedbackData) -> Self {
+        SensorArmData {
+            object_data: ObjectData {
+                object_velocity: 0.0,
+                object_mass: 0.0,
+                object_size: 0.0,
+                object_distance: 0.0,
+            },
+            wrist: feedback.wrist,
+            joints: feedback.joints,
+            elbow: feedback.elbow,
+            arm_velocity: 0.0,
+            arm_strength: 0.0,
+            timestamp: feedback.timestamp,
+        }
+    }
+}
