@@ -7,8 +7,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
 #[tokio::main]
-async fn main() {
-    // Connect to RabbitMQ server
+//start function
+pub async fn start() {
+    let channel = create_channel().await;
+
+    //thread 1: simulate arm
+    consume_sensor_data(channel).await;
+
+    //thread 2: calculate latency
+    start_lantency();
+}
+async fn create_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -31,9 +40,7 @@ async fn main() {
         .await
         .expect("Queue declaration error");
 
-    println!("> Actuator is ready to receive sensor data...");
-
-    consume_sensor_data(channel).await;
+    channel
 }
 
 async fn consume_sensor_data(channel: Channel) {
@@ -51,21 +58,24 @@ async fn consume_sensor_data(channel: Channel) {
     let mut total_msgs = 0u64;
     let mut missed_deadlines = 0u64;
 
+    println!("> Actuator is ready to receive sensor data...");
+
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Actuator> Consumer stream error: {:?}", e);
+                eprintln!("Consumer stream error: {:?}", e);
                 continue;
             }
         };
 
         let payload = &delivery.data;
 
-        let sensor_data: SensorData = match serde_json::from_slice(payload) {
+        // handle deserialize errors
+        let sensor_data: SensorArmData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Actuator> Failed to deserialize sensor data: {:?}", e);
+                eprintln!("Failed to deserialize sensor data: {:?}", e);
                 delivery
                     .nack(Default::default())
                     .await
@@ -115,24 +125,12 @@ async fn consume_sensor_data(channel: Channel) {
 async fn control_arm(channel: &Channel, data: SensorArmData) {
     println!("Executing control for sensor data: {:?}", data);
 
-    let status = if data.force_data > 10.0 {
-        "force_high"
-    } else {
-        "nominal"
-    };
-
-    let adjustment = if data.force_data > 10.0 { -0.3 } else { 0.2 };
-
-    send_feedback(channel, status, adjustment).await;
+    send_feedback(channel, data).await;
 }
 
 /// Simulates sending feedback from actuator to sensor.
-async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
-    let feedback = FeedbackData {
-        status: status.to_string(),
-        adjustment_value: adjustment,
-        timestamp: now_micros(),
-    };
+pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
+    let feedback = data.to_feedback();
 
     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
 
@@ -150,5 +148,13 @@ async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
         .await
         .expect("Failed to confirm feedback delivery");
 
-    // println!("> Sent feedback to sensor: {:?}", feedback);
+    println!("> Sent feedback to sensor: {:?}", feedback);
+}
+
+fn start_lantency() {
+    // This function is a placeholder for starting latency calculations.
+    // In a real application, you would implement the logic to calculate and log latencies here.
+    println!("> Starting latency calculations...");
+    // For example, you could spawn a new task to periodically log latencies.
+    // tokio::spawn(async move { ... });
 }

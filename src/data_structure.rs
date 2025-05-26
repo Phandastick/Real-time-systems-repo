@@ -20,6 +20,8 @@ pub struct ObjectData {
     pub object_mass: f32,
     pub object_size: f32,
     pub object_distance: f32, //height from robotic arm
+    pub object_x: f32,        // x position of the object
+    pub object_y: f32,        // y position of the object
 }
 
 //stored in sensor
