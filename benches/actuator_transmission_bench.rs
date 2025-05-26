@@ -14,9 +14,9 @@ fn latency_benchmark(c: &mut Criterion) {
                     .await
                     .expect("Connection error");
 
-            let channel: T<Send> = conn.create_channel().await.expect("Channel error");
+            let channel = conn.create_channel().await.expect("Channel error");
 
-            let consumer_handle = tokio::spawn(simulate_actuator(channel));
+            let consumer_handle = tokio::spawn(simulate_actuator(channel.clone(), 10000));
             // simulate_controller(100, channel.clone()).await;
             let _ = consumer_handle.await.unwrap();
 

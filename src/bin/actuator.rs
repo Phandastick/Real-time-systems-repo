@@ -1,14 +1,14 @@
-#![allow(unused_variables)]
+#![allow(unused_imports, unused_variables, unused_mut)]
 use futures_util::stream::StreamExt;
-use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
-use rand::Rng;
 use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use Real_time_systems_repo::{data_structure::*, now_micros};
+use lapin::BasicProperties;
 
 #[tokio::main]
 async fn main() {
+    // Connect to RabbitMQ server
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -33,12 +33,10 @@ async fn main() {
 
     println!("> Actuator is ready to receive sensor data...");
 
-    let latencies = simulate_actuator(channel).await;
+    consume_sensor_data(channel).await;
 }
 
-pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
-    let mut rng = rand::rng();
-
+async fn consume_sensor_data(channel: Channel) {
     let mut consumer: Consumer = channel
         .basic_consume(
             "sensor_data",
@@ -49,7 +47,9 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
         .await
         .expect("Basic consume error");
 
-    let mut latencies = Vec::new();
+    // let mut latencies = Vec::new();
+    let mut total_msgs = 0u64;
+    let mut missed_deadlines = 0u64;
 
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
@@ -106,6 +106,7 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
         // Process the sensor data
         control_arm(&channel, sensor_data).await;
 
+
         delivery
             .ack(Default::default())
             .await
@@ -115,17 +116,22 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
 
 async fn control_arm(channel: &Channel, data: SensorArmData) {
     println!("Executing control for sensor data: {:?}", data);
-
+    
     let status = if data.force_data > 10.0 {
         "force_high"
     } else {
         "nominal"
     };
 
-    let adjustment = if data.force_data > 10.0 { -0.3 } else { 0.2 };
+    let adjustment = if data.force_data > 10.0 {
+        -0.3
+    } else {
+        0.2
+    };
 
     send_feedback(channel, status, adjustment).await;
 }
+
 
 /// Simulates sending feedback from actuator to sensor.
 pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
