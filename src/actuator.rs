@@ -1,5 +1,5 @@
 #![allow(unused_variables)]
-use crate::data_structure::*;
+use crate::{data_structure::*, now_micros};
 use futures_util::stream::StreamExt;
 use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
@@ -9,6 +9,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 //start function
 pub async fn start() {
+    println!("> Actuator is ready to receive sensor data...");
+
+    let mut stamping_data = StampingData::new(0.8, 10, 5);
+    let mut channel = init_channel().await;
+
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    //thread 1 - receiving data
+    simulate_actuator(channel, &mut stamping_data).await;
+
+    //thread 2 - calculate reception latency
+    start_latency();
+}
+
+// This version accepts a mutable StampingData reference
+pub async fn init_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -30,21 +45,12 @@ pub async fn start() {
         )
         .await
         .expect("Queue declaration error");
-
-    println!("> Actuator is ready to receive sensor data...");
-
-    let latencies = simulate_actuator(channel).await;
+    channel
 }
 
-fn now_micros() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros()
-}
-
-pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
+async fn simulate_actuator(channel: Channel, stamping_data: &mut StampingData) {
     let mut rng = rand::rng();
+    // let mut latencies = Vec::new();
 
     let mut consumer: Consumer = channel
         .basic_consume(
@@ -55,8 +61,6 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
         )
         .await
         .expect("Basic consume error");
-
-    let mut latencies = Vec::new();
 
     while let Some(delivery) = consumer.next().await {
         let delivery = match delivery {
@@ -69,8 +73,7 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
 
         let payload = &delivery.data;
 
-        // handle deserialize errors
-        let sensor_data: SensorArmData = match serde_json::from_slice(payload) {
+        let sensor_data: SensorData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("Failed to deserialize sensor data: {:?}", e);
@@ -82,25 +85,20 @@ pub async fn simulate_actuator(channel: Channel) -> Vec<u128> {
             }
         };
 
-        let latency = now_micros() - sensor_data.timestamp;
-        latencies.push(latency);
+        // Update the stamping state
+        control_arm(stamping_data, sensor_data).await;
 
-        delivery.ack(Default::default()).await.expect("Ack failed");
+        delivery
+            .ack(Default::default())
+            .await
+            .expect("Failed to ack");
 
-        send_feedback(
-            &channel,
-            rng.random::<u32>(),
-            "Processed",
-            rng.random::<f64>(),
-        )
-        .await;
+        send_feedback(&channel, "Processed", rng.random::<f64>()).await;
     }
-
-    latencies //return vector
 }
 
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, actuator_id: u32, status: &str, adjustment: f64) {
+pub async fn send_feedback(channel: &Channel, status: &str, adjustment: f64) {
     let feedback = FeedbackData {
         status: status.to_string(),
         adjustment_value: adjustment,
@@ -125,3 +123,19 @@ pub async fn send_feedback(channel: &Channel, actuator_id: u32, status: &str, ad
 
     println!("> Sent feedback to sensor: {:?}", feedback);
 }
+
+// #region Control logic
+// Control logic that receives deserialized sensor data and updates system state
+pub async fn control_arm(stamping_data: &mut StampingData, sensor_data: SensorData) {
+    stamping_data.update_sensor_data(sensor_data.position, sensor_data.velocity);
+
+    // Optionally log or simulate behavior based on updated state
+    println!(
+        "Updated StampingData: pos = {:.3}, vel = {:.3}",
+        stamping_data.current_position, stamping_data.current_velocity
+    );
+
+    // You can add more predictive or feedback logic here
+}
+
+//#endregion
