@@ -44,4 +44,5 @@ pub struct FeedbackData {
     pub wrist: WristData,
     pub joints: ShoulderData,
     pub elbow: ElbowData,
+    pub timestamp: u128,
 }
