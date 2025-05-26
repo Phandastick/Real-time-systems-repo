@@ -1,13 +1,17 @@
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug)]
 pub struct SensorArmData {
-    pub force_data: f32,
+    pub object_angle: f32,
+    pub object_mass: f32,
+
     pub wrist: WristData,
     pub joints: ShoulderData,
     pub elbow: ElbowData,
+
     pub timestamp: u128,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+//stored in sensor
+#[derive(Debug)]
 pub struct WristData {
     pub wrist_x: f32,
     pub wrist_y: f32,
@@ -29,8 +33,8 @@ pub struct ElbowData {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FeedbackData {     
-    pub status: String,        
-    pub adjustment_value: f64, 
+pub struct FeedbackData {
+    pub status: String,
+    pub adjustment_value: f64,
     pub timestamp: u128,
 }
