@@ -3,8 +3,8 @@ pub struct SensorArmData {
     pub object_data: ObjectData,
 
     pub wrist: WristData,
-    pub shoulder: ShoulderData, // controls x
-    pub elbow: ElbowData,       // controls y
+    pub joints: ShoulderData,
+    pub elbow: ElbowData,
     pub arm_velocity: f32,
     //higher speed, more strength
     pub arm_strength: f32, // use speed to calculate force of arm
@@ -42,6 +42,6 @@ pub struct ElbowData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeedbackData {
     pub wrist: WristData,
-    pub shoulder: ShoulderData,
+    pub joints: ShoulderData,
     pub elbow: ElbowData,
 }
