@@ -93,8 +93,17 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
                 continue;
             }
         };
+<<<<<<< Updated upstream
         // Timestamp immediately upon receiving message
         let receive_time = now_micros();
+=======
+
+        total_msgs += 1;
+        lat_tx
+            .send(sensor_data.timestamp)
+            .expect("Failed to send receive time for latency calculation");
+        let receive_time: u128 = now_micros();
+>>>>>>> Stashed changes
 
         // Process and send response
         control_arm(&channel, sensor_data, receive_time).await;
