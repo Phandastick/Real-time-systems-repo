@@ -1,15 +1,15 @@
+use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use rand::random;
+use scheduled_thread_pool::ScheduledThreadPool;
 use serde_json;
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use Real_time_systems_repo::data_structure::*;
-use futures_util::stream::StreamExt;
-use scheduled_thread_pool::ScheduledThreadPool;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
+use Real_time_systems_repo::data_structure::*;
 
 const WINDOW_SIZE: usize = 5;
 
@@ -88,7 +88,7 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
     let object_data = ObjectData {
         //velocity > mass since v = u + at, where v = final velocity, u = initial velocity(at rest so 0), a = acceleration (gravity 9.8), t = time (object has to be caught at 1s)
         // up to 11.8 m/s and the object can be heavier than 1g
-        object_velocity: 9.8 + random::<f32>() * 2.0, 
+        object_velocity: 9.8 + random::<f32>() * 2.0,
         //since mass can change, the heavier the object the more difficult it is to catch as there is more momentum thus more velocity
         //thus variability in velocity is needed
         //1 - 5g
@@ -98,12 +98,11 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
         //distance changes due to the object being let go at different areas of the tube, where tube is a circle with diameter of 3cm
         //thus object is at any point within the tube(circle)
         //need x and y to tell where the robotic arm is in relation to the object to catch it
-        //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind 
+        //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind
         //range of 0-3 in addition to max length of arm
         object_distance_x: random::<f32>() * 3.0,
         //-1.5 to 1.5
         object_distance_y: (random::<f32>() * 3.0) - 1.5,
-
     };
 
     let mut sensor_data = SensorArmData::new(object_data.clone());
@@ -170,10 +169,14 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
     filtered.elbow.elbow_x = filters.elbow_x_filter.update(raw.elbow.elbow_x);
     filtered.elbow.elbow_y = filters.elbow_y_filter.update(raw.elbow.elbow_y);
     filtered.arm_velocity = filters.arm_velocity_filter.update(raw.arm_velocity);
-    filtered.object_data.object_distance_x = filters.object_distance_x_filter.update(raw.object_data.object_distance_x);
-    filtered.object_data.object_distance_y = filters.object_distance_y_filter.update(raw.object_data.object_distance_y);
+    filtered.object_data.object_distance_x = filters
+        .object_distance_x_filter
+        .update(raw.object_data.object_distance_x);
+    filtered.object_data.object_distance_y = filters
+        .object_distance_y_filter
+        .update(raw.object_data.object_distance_y);
     filtered.arm_strength = filtered.arm_velocity * raw.object_data.object_mass;
-    
+
     let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 50.0)
         || detect_anomaly(filtered.wrist.wrist_x, 0.0, 12.0)
         || detect_anomaly(filtered.wrist.wrist_y, -1.5, 1.5)
@@ -183,29 +186,36 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
         || detect_anomaly(filtered.elbow.elbow_y, -1.5, 1.5)
         || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
         || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
-        || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
+        || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8); // non-moving object
 
     (filtered, anomaly)
 }
 
 async fn consume_feedback(shutdown: Arc<Notify>) {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
-        .await.expect("Connection error");
+        .await
+        .expect("Connection error");
 
     let channel = conn.create_channel().await.expect("Channel creation error");
 
-    channel.queue_declare(
-        "feedback_to_sensor",
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    ).await.expect("Queue declaration error");
+    channel
+        .queue_declare(
+            "feedback_to_sensor",
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        )
+        .await
+        .expect("Queue declaration error");
 
-    let mut consumer = channel.basic_consume(
-        "feedback_to_sensor",
-        "feedback_consumer",
-        BasicConsumeOptions::default(),
-        FieldTable::default(),
-    ).await.expect("Basic consume error");
+    let mut consumer = channel
+        .basic_consume(
+            "feedback_to_sensor",
+            "feedback_consumer",
+            BasicConsumeOptions::default(),
+            FieldTable::default(),
+        )
+        .await
+        .expect("Basic consume error");
 
     println!("> Feedback consumer ready...");
 
@@ -252,26 +262,36 @@ async fn main() {
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
 
     let publisher_handle = tokio::spawn(async move {
-        let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
-            .await.expect("Connection error");
+        let conn =
+            Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
+                .await
+                .expect("Connection error");
         let channel = conn.create_channel().await.expect("Channel creation error");
 
-        channel.queue_declare(
-            "sensor_data",
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        ).await.expect("Queue declaration error");
+        channel
+            .queue_declare(
+                "sensor_data",
+                QueueDeclareOptions::default(),
+                FieldTable::default(),
+            )
+            .await
+            .expect("Queue declaration error");
 
         while let Some(processed_data) = rx_processed.recv().await {
             let payload = serde_json::to_vec(&processed_data).expect("Serialization failed");
 
-            channel.basic_publish(
-                "",
-                "sensor_data",
-                BasicPublishOptions::default(),
-                &payload,
-                Default::default(),
-            ).await.expect("Publish failed").await.expect("Confirmation failed");
+            channel
+                .basic_publish(
+                    "",
+                    "sensor_data",
+                    BasicPublishOptions::default(),
+                    &payload,
+                    Default::default(),
+                )
+                .await
+                .expect("Publish failed")
+                .await
+                .expect("Confirmation failed");
         }
         println!("Publisher exiting cleanly.");
     });
@@ -283,29 +303,33 @@ async fn main() {
     let tx_blocking = tx_processed.clone();
     let cycle_clone = Arc::clone(&cycle);
 
-    pool.execute_at_fixed_rate(Duration::from_millis(0), Duration::from_millis(10), move || {
-        let mut c = cycle_clone.lock().unwrap();
-        if *c > max_cycles {
-            shutdown_notify_producer.notify_waiters();
-            return;
-        }
+    pool.execute_at_fixed_rate(
+        Duration::from_millis(0),
+        Duration::from_millis(10),
+        move || {
+            let mut c = cycle_clone.lock().unwrap();
+            if *c > max_cycles {
+                shutdown_notify_producer.notify_waiters();
+                return;
+            }
 
-        let current_cycle = *c;
-        *c += 1;
+            let current_cycle = *c;
+            *c += 1;
 
-        let data = generate_sensor_data(current_cycle);
-        let mut filters = shared_filters_clone.lock().unwrap();
-        let (processed, anomaly) = process_sensor_data(data, &mut filters);
+            let data = generate_sensor_data(current_cycle);
+            let mut filters = shared_filters_clone.lock().unwrap();
+            let (processed, anomaly) = process_sensor_data(data, &mut filters);
 
-        println!(
-            "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
-            current_cycle, processed.arm_strength, anomaly
-        );
+            println!(
+                "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
+                current_cycle, processed.arm_strength, anomaly
+            );
 
-        if let Err(e) = tx_blocking.try_send(processed) {
-            eprintln!("Failed to send processed data: {}", e);
-        }
-    });
+            if let Err(e) = tx_blocking.try_send(processed) {
+                eprintln!("Failed to send processed data: {}", e);
+            }
+        },
+    );
 
     shutdown_notify.notified().await;
     println!("All cycles processed. Cleaning up...");
