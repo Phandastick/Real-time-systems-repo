@@ -15,12 +15,16 @@ fn main() {
 pub async fn start() {
     let channel = create_channel().await;
 
-    //thread 1: simulate arm
-    consume_sensor_data(channel).await;
+    // Set up mpsc channel for latency logging
+    let (lat_tx, lat_rx) = mpsc::unbounded_channel();
 
-    //thread 2: calculate latency
-    start_lantency();
+    // Thread 1: Simulate arm
+    tokio::spawn(consume_sensor_data(channel.clone(), lat_tx));
+
+    // Thread 2: Log latency
+    tokio::spawn(start_latency(lat_rx));
 }
+
 async fn create_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
@@ -48,7 +52,7 @@ async fn create_channel() -> Channel {
     channel
 }
 
-async fn consume_sensor_data(channel: Channel) {
+async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u128>) {
     let mut consumer: Consumer = channel
         .basic_consume(
             "sensor_data",
@@ -87,6 +91,9 @@ async fn consume_sensor_data(channel: Channel) {
                 continue;
             }
         };
+
+        // send timestamp for latency logging
+        let _ = lat_tx.send(sensor_data.timestamp);
 
         // Process the sensor data
         control_arm(&channel, sensor_data).await;
@@ -178,10 +185,12 @@ pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
     println!("> Sent feedback to sensor: {:?}", feedback);
 }
 
-fn start_lantency() {
-    // This function is a placeholder for starting latency calculations.
-    // In a real application, you would implement the logic to calculate and log latencies here.
+async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
     println!("> Starting latency calculations...");
-    // For example, you could spawn a new task to periodically log latencies.
-    // tokio::spawn(async move { ... });
+
+    while let Some(sent_timestamp) = lat_rx.recv().await {
+        let now = now_micros();
+        let latency = now.saturating_sub(sent_timestamp);
+        println!("⚡ Latency: {} µs", latency);
+    }
 }
