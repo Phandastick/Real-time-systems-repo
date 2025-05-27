@@ -15,6 +15,7 @@ pub struct SensorArmData {
     pub arm_velocity: f32,
     //higher speed, more strength
     pub arm_strength: f32, // use speed to calculate force of arm
+    pub arm_length: i32,
 
     pub timestamp: u128,
 }
