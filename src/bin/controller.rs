@@ -84,26 +84,56 @@ fn detect_anomaly(value: f32, lower: f32, upper: f32) -> bool {
     value < lower || value > upper
 }
 
-fn generate_sensor_data(cycle: u64) -> SensorArmData {
-    let object_data = ObjectData {
-        //velocity > mass since v = u + at, where v = final velocity, u = initial velocity(at rest so 0), a = acceleration (gravity 9.8), t = time (object has to be caught at 1s)
-        // up to 11.8 m/s and the object can be heavier than 1g
-        object_velocity: 9.8 + random::<f32>() * 2.0, 
-        //since mass can change, the heavier the object the more difficult it is to catch as there is more momentum thus more velocity
-        //thus variability in velocity is needed
-        //1 - 5g
-        object_mass: 1.0 + random::<f32>() * 4.0,
-        //assume size is variable in small range of 4-5l
-        object_size: 4.0 + random::<f32>(),
-        //distance changes due to the object being let go at different areas of the tube, where tube is a circle with diameter of 3cm
-        //thus object is at any point within the tube(circle)
-        //need x and y to tell where the robotic arm is in relation to the object to catch it
-        //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind 
-        //range of 0-3 in addition to max length of arm
-        object_distance_x: random::<f32>() * 3.0,
-        //-1.5 to 1.5
-        object_distance_y: (random::<f32>() * 3.0) - 1.5,
+fn generate_anomalous_object_data() -> ObjectData {
+    ObjectData {
+        // velocity is very low or 0, indicating no drop or static obstruction like a hand
+        object_velocity: random::<f32>() * 1.0, // 0–1 m/s (very slow or static)
 
+        // since mass can change, the heavier the object the more difficult it is to catch as there is more momentum thus more velocity
+        // anomaly: very heavy (hand = 400–600g vs normal 1–5g)
+        object_mass: 100.0 + random::<f32>() * 500.0, // 100g–600g = unexpected
+
+        // assume size is variable in small range of 4-5l
+        // anomaly: either too small or much larger object
+        object_size: 10.0 + random::<f32>() * 20.0, // 10–30L = abnormal for expected object
+
+        // distance changes due to the object being let go at different areas of the tube, where tube is a circle with diameter of 3cm
+        // anomaly: object is placed very close or far off, like a hand waving or blocking the tube
+        object_distance_x: 2.5 + random::<f32>() * 3.0, // 2.5–5.5 cm (outside normal tube center)
+
+        // -1.5 to 1.5, but hand might extend further
+        object_distance_y: -2.0 + random::<f32>() * 4.0, // -2.0 to +2.0 (possibly out of vertical bounds)
+    }
+}
+
+fn generate_sensor_data(cycle: u64) -> SensorArmData {
+    let object_data = if cycle % 10 == 0 {
+        // Every 10th cycle, simulate an anomaly (like hand)
+        generate_anomalous_object_data()
+    } else {
+        // Normal falling object
+        ObjectData {
+            //velocity > mass since v = u + at, where v = final velocity, u = initial velocity(at rest so 0), a = acceleration (gravity 9.8), t = time (object has to be caught at 1s)
+            // up to 11.8 m/s and the object can be heavier than 1g
+            object_velocity: 9.8 + random::<f32>() * 2.0, 
+            //since mass can change, the heavier the object the more difficult it is to catch as there is more momentum thus more velocity
+            //thus variability in velocity is needed
+            //1 - 5g
+            object_mass: 1.0 + random::<f32>() * 4.0,
+            //assume size is variable in small range of 4-5l
+            object_size: 4.0 + random::<f32>(),
+            //distance changes due to the object being let go at different areas of the tube, where tube is a circle with diameter of 3cm
+            //thus object is at any point within the tube(circle)
+            //need x and y to tell where the robotic arm is in relation to the object to catch it
+            //where x is front back y is left right
+            //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind 
+            //range of 0-3 in addition to max length of arm
+            object_distance_x: random::<f32>() * 3.0,
+            //-1.5 to 1.5
+            object_distance_y: (random::<f32>() * 3.0) - 1.5,
+            //requires arm data first, so we set it to 0
+            object_height: 0.0, 
+        }
     };
 
     let mut sensor_data = SensorArmData::new(object_data.clone());
@@ -156,7 +186,7 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
     sensor_data.arm_strength = sensor_data.arm_velocity * sensor_data.object_data.object_mass;
 
     sensor_data.timestamp = now_micros();
-
+    sensor_data.object_data.object_height = shoulder_y + l1 * sin(theta1) + l2 * sin(theta1 + theta2);
     sensor_data
 }
 
@@ -242,14 +272,46 @@ async fn consume_feedback(shutdown: Arc<Notify>) {
 async fn main() {
     let pool = ScheduledThreadPool::new(4);
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 1_000u64;
+    let max_cycles = 10u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
+    let tx_blocking = tx_processed.clone();
+    let cycle_clone = Arc::clone(&cycle);
     let shutdown_notify = Arc::new(Notify::new());
     let shutdown_notify_producer = Arc::clone(&shutdown_notify);
     let feedback_shutdown = Arc::new(Notify::new());
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
+
+    pool.execute_at_fixed_rate(Duration::from_millis(0), Duration::from_millis(10), move || {
+        let mut c = cycle_clone.lock().unwrap();
+        if *c > max_cycles {
+            shutdown_notify_producer.notify_waiters();
+            return;
+        }
+
+        let current_cycle = *c;
+        *c += 1;
+
+        let data = generate_sensor_data(current_cycle);
+        let mut filters = shared_filters_clone.lock().unwrap();
+        let (processed, anomaly) = process_sensor_data(data, &mut filters);
+
+        if anomaly {
+            // Only log anomaly, don't send data
+            println!("Anomaly detected in cycle {}: {:?}", current_cycle, processed);
+        } else {
+            // No anomaly: send data
+            println!(
+                "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
+                current_cycle, processed.arm_strength, anomaly
+            );
+
+            if let Err(e) = tx_blocking.try_send(processed) {
+                eprintln!("Failed to send processed data: {}", e);
+            }
+        }
+    });
 
     let publisher_handle = tokio::spawn(async move {
         let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
@@ -278,33 +340,6 @@ async fn main() {
 
     let feedback_handle = tokio::spawn(async move {
         consume_feedback(feedback_shutdown_consumer).await;
-    });
-
-    let tx_blocking = tx_processed.clone();
-    let cycle_clone = Arc::clone(&cycle);
-
-    pool.execute_at_fixed_rate(Duration::from_millis(0), Duration::from_millis(10), move || {
-        let mut c = cycle_clone.lock().unwrap();
-        if *c > max_cycles {
-            shutdown_notify_producer.notify_waiters();
-            return;
-        }
-
-        let current_cycle = *c;
-        *c += 1;
-
-        let data = generate_sensor_data(current_cycle);
-        let mut filters = shared_filters_clone.lock().unwrap();
-        let (processed, anomaly) = process_sensor_data(data, &mut filters);
-
-        println!(
-            "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
-            current_cycle, processed.arm_strength, anomaly
-        );
-
-        if let Err(e) = tx_blocking.try_send(processed) {
-            eprintln!("Failed to send processed data: {}", e);
-        }
     });
 
     shutdown_notify.notified().await;
