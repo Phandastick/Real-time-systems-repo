@@ -126,7 +126,7 @@ impl SensorArmData {
     }
 }
 
-//controller-specific structures
+//controller specific struct
 pub const WINDOW_SIZE: usize = 5;
 
 #[derive(Debug, Clone)]
