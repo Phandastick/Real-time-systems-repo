@@ -15,6 +15,7 @@ pub struct SensorArmData {
     pub arm_velocity: f32,
     //higher speed, more strength
     pub arm_strength: f32, // use speed to calculate force of arm
+    pub arm_length: i32,
 
     pub timestamp: u128,
 }
@@ -73,6 +74,7 @@ impl SensorArmData {
             elbow,
             arm_velocity,
             arm_strength,
+            arm_length: 10,
             timestamp: 0,
         }
     }
@@ -119,6 +121,7 @@ impl SensorArmData {
             arm_velocity: 0.0,
             arm_strength: 0.0,
             timestamp: feedback.timestamp,
+            arm_length: 10,
         }
     }
 }

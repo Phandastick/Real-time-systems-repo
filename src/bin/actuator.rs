@@ -3,23 +3,30 @@ use futures_util::stream::StreamExt;
 use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
+use std::f32::consts::PI;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
-fn main() {
-    start();
+#[tokio::main]
+async fn main() {
+    start().await;
 }
 
 //start function
 pub async fn start() {
     let channel = create_channel().await;
 
-    //thread 1: simulate arm
-    consume_sensor_data(channel).await;
+    // Set up mpsc channel for latency logging
+    let (lat_tx, lat_rx) = mpsc::unbounded_channel();
 
-    //thread 2: calculate latency
-    start_lantency();
+    // Thread 2: Log latency
+    tokio::spawn(start_latency(lat_rx));
+
+    // Thread 1: Simulate arm
+    let _ = tokio::spawn(consume_sensor_data(channel.clone(), lat_tx)).await;
 }
+
 async fn create_channel() -> Channel {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
@@ -47,7 +54,7 @@ async fn create_channel() -> Channel {
     channel
 }
 
-async fn consume_sensor_data(channel: Channel) {
+async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u128>) {
     let mut consumer: Consumer = channel
         .basic_consume(
             "sensor_data",
@@ -87,6 +94,9 @@ async fn consume_sensor_data(channel: Channel) {
             }
         };
 
+        // send timestamp for latency logging
+        let _ = lat_tx.send(sensor_data.timestamp);
+
         // Process the sensor data
         control_arm(&channel, sensor_data).await;
 
@@ -100,37 +110,61 @@ async fn consume_sensor_data(channel: Channel) {
 async fn control_arm(channel: &Channel, mut data: SensorArmData) {
     println!("Executing control for sensor data: {:?}", data);
 
-    // calculate time to reach wrist
-    let reach_time = if data.object_data.object_velocity > 0.0 {
-        data.object_data.object_height / data.object_data.object_velocity
+    let target_x = data.object_data.object_x;
+    let target_y = data.object_data.object_y;
+
+    // Arm segment lengths
+    let l1 = 10.0; // shoulder to elbow
+    let l2 = 10.0; // elbow to wrist
+
+    // Distance to target from shoulder (0, 0)
+    let dist = (target_x.powi(2) + target_y.powi(2)).sqrt();
+
+    // Clamp target if beyond max reach
+    let (clamped_x, clamped_y) = if dist > l1 + l2 {
+        let scale = (l1 + l2) / dist;
+        (target_x * scale, target_y * scale)
     } else {
-        0.0
+        (target_x, target_y)
     };
 
-    // move arm to track object
-    let horizontal_displacement = data.object_data.object_velocity * reach_time;
+    // Inverse kinematics: calculate angles
+    let cos_theta2 =
+        ((clamped_x.powi(2) + clamped_y.powi(2)) - l1.powi(2) - l2.powi(2)) / (2.0 * l1 * l2);
+    let cos_theta2 = cos_theta2.clamp(-1.0, 1.0); // prevent NaNs
+    let theta2 = cos_theta2.acos(); // elbow angle
 
-    // Target positions
-    let target_x = horizontal_displacement;
-    let target_y = 0.0; // At arm's level
+    let k1 = l1 + l2 * theta2.cos();
+    let k2 = l2 * theta2.sin();
+    let theta1 = clamped_y.atan2(clamped_x) - k2.atan2(k1); // shoulder angle
 
-    // Step 3: Set joint positions to match the predicted wrist position
-    // Shoulder affects x, elbow affects y
-    data.joints.shoulder_x = target_x;
-    data.elbow.elbow_y = target_y;
+    // Calculate joint positions
+    let shoulder_x = 0.0;
+    let shoulder_y = 0.0;
 
-    // Step 4: Update wrist based on new joint positions
-    data.wrist.wrist_x = data.joints.shoulder_x;
-    data.wrist.wrist_y = data.elbow.elbow_y;
+    let elbow_x = shoulder_x + l1 * theta1.cos();
+    let elbow_y = shoulder_y + l1 * theta1.sin();
+
+    let wrist_x = elbow_x + l2 * (theta1 + theta2).cos();
+    let wrist_y = elbow_y + l2 * (theta1 + theta2).sin();
+
+    // Set new joint and wrist positions
+    data.joints.shoulder_x = shoulder_x;
+    data.joints.shoulder_y = shoulder_y;
+
+    data.elbow.elbow_x = elbow_x;
+    data.elbow.elbow_y = elbow_y;
+
+    data.wrist.wrist_x = wrist_x;
+    data.wrist.wrist_y = wrist_y;
 
     println!(
-        "Arm moved to track object at predicted (x={}, y={})",
-        target_x, target_y
+        "Arm moved to catch object at target (x={}, y={}) with elbow at ({:.2}, {:.2}) and wrist at ({:.2}, {:.2})",
+        target_x, target_y, elbow_x, elbow_y, wrist_x, wrist_y
     );
 
     send_feedback(channel, data).await;
 }
-
 /// Simulates sending feedback from actuator to sensor.
 pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
     let feedback = data.to_feedback();
@@ -153,10 +187,12 @@ pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
     println!("> Sent feedback to sensor: {:?}", feedback);
 }
 
-fn start_lantency() {
-    // This function is a placeholder for starting latency calculations.
-    // In a real application, you would implement the logic to calculate and log latencies here.
+async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
     println!("> Starting latency calculations...");
-    // For example, you could spawn a new task to periodically log latencies.
-    // tokio::spawn(async move { ... });
+
+    while let Some(sent_timestamp) = lat_rx.recv().await {
+        let now = now_micros();
+        let latency = now.saturating_sub(sent_timestamp);
+        println!("⚡ Latency: {} µs", latency);
+    }
 }
