@@ -24,8 +24,9 @@ pub struct ObjectData {
     pub object_velocity: f32,
     pub object_mass: f32,
     pub object_size: f32,
-    pub object_distance_x: f32,
-    pub object_distance_y: f32,
+    pub object_x: f32,
+    pub object_y: f32,
+    pub object_height: f32,
 }
 
 //stored in sensor
@@ -108,7 +109,7 @@ impl SensorArmData {
                 object_velocity: 0.0,
                 object_mass: 0.0,
                 object_size: 0.0,
-                object_distance: 0.0,
+                object_height: 0.0,
                 object_x: 0.0,
                 object_y: 0.0,
             },
