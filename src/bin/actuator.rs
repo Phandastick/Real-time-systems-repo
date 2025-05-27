@@ -127,9 +127,6 @@ async fn consume_sensor_data(
             }
         };
 
-        // Process and send response
-        control_arm(&channel, sensor_data, receive_time, &shoulder_tx, &elbow_tx).await;
-
         total_msgs += 1;
         // lat_tx
         //     .send(sensor_data.timestamp)
@@ -161,6 +158,7 @@ async fn control_arm(
     receive_time: u128,
     shoulder_tx: &mpsc::UnboundedSender<ShoulderData>,
     elbow_tx: &mpsc::UnboundedSender<ElbowData>,
+    cycle_start_time: u128,
 ) {
     // println!("Executing control for sensor data: {:?}", data);
 
