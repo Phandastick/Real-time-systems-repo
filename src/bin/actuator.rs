@@ -6,12 +6,12 @@ use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
-#[tokio::main]
-async fn main() {
-    start().await;
+fn main() {
+    start();
 }
+
 //start function
-pub async fn main() {
+pub async fn start() {
     let channel = create_channel().await;
 
     //thread 1: simulate arm
@@ -102,7 +102,7 @@ async fn control_arm(channel: &Channel, mut data: SensorArmData) {
 
     // calculate time to reach wrist
     let reach_time = if data.object_data.object_velocity > 0.0 {
-        data.object_data.object_distance / data.object_data.object_velocity
+        data.object_data.object_height / data.object_data.object_velocity
     } else {
         0.0
     };
