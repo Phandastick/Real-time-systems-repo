@@ -99,41 +99,54 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
         //thus object is at any point within the tube(circle)
         //need x and y to tell where the robotic arm is in relation to the object to catch it
         //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind 
-        //range of 0-3
+        //range of 0-3 in addition to max length of arm
         object_distance_x: random::<f32>() * 3.0,
-        object_distance_y: random::<f32>() * 3.0,
+        //-1.5 to 1.5
+        object_distance_y: (random::<f32>() * 3.0) - 1.5,
+
     };
 
     let mut sensor_data = SensorArmData::new(object_data.clone());
     sensor_data.update_object_data(object_data);
 
-    // using forward kinematics to calculate arm positions
+    //using forward kinematics to calculate arm positions
 
     //wrist length > elbow length > shoulder length
     //shoulder is the base of the arm, so it is the least variable
     //shoulder length can vary from 0cm to 1cm
     sensor_data.joints.shoulder_x = random::<f32>() * 1.0;
-    sensor_data.joints.shoulder_y = random::<f32>() * 1.0;
+    sensor_data.joints.shoulder_y = (random::<f32>() * 3.0) - 1.5; // y: [-1.5, 1.5]
 
     //realistic segment lengths (upper and lower arm)
     //l1 = shoulder to elbow (1–4cm), l2 = elbow to wrist (4–7cm)
     let l1 = 1.0 + random::<f32>() * 3.0; // 1cm base + 0–3cm range = 1–4cm
     let l2 = 4.0 + random::<f32>() * 3.0; // 4–7cm
 
-    //random but plausible joint angles (in radians)
-    //shoulder can rotate full 360°, elbow only bends ±90°
-    let theta1 = random::<f32>() * std::f32::consts::TAU;     // shoulder rotation: 0 to 2π radians
-    let theta2 = (random::<f32>() - 0.5) * std::f32::consts::PI; // elbow bend: -π/2 to +π/2
+    //limit shoulder angle to forward-facing only, so wrist stays in x ≥ 0
+    //angle from 0 (right) to π (left), but we clamp it to [0, π/2] for safe forward-right region
+    let theta1 = random::<f32>() * std::f32::consts::FRAC_PI_2; // [0, π/2]
+
+    //elbow bend ±90°, so -π/2 to π/2 range is OK
+    let theta2 = (random::<f32>() - 0.5) * std::f32::consts::PI;
 
     //using FK to get elbow position from shoulder + angle + l1
     //this models the upper arm segment
     sensor_data.elbow.elbow_x = sensor_data.joints.shoulder_x + l1 * theta1.cos();
     sensor_data.elbow.elbow_y = sensor_data.joints.shoulder_y + l1 * theta1.sin();
+    sensor_data.elbow.elbow_y = sensor_data.elbow.elbow_y.clamp(-1.5, 1.5); // constrain y range
 
     //wrist is the end of the forearm, which bends at the elbow
     //direction is based on total angle (shoulder + elbow joint)
     sensor_data.wrist.wrist_x = sensor_data.elbow.elbow_x + l2 * (theta1 + theta2).cos();
     sensor_data.wrist.wrist_y = sensor_data.elbow.elbow_y + l2 * (theta1 + theta2).sin();
+
+    // clamp wrist_x to ≥ shoulder_x
+    if sensor_data.wrist.wrist_x < sensor_data.joints.shoulder_x {
+        sensor_data.wrist.wrist_x = sensor_data.joints.shoulder_x;
+    }
+
+    // clamp wrist_y to [-1.5, 1.5]
+    sensor_data.wrist.wrist_y = sensor_data.wrist.wrist_y.clamp(-1.5, 1.5);
 
     //suggested arm velocity to catch object
     sensor_data.arm_velocity = random::<f32>() * 10.0;
@@ -160,14 +173,17 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
     filtered.object_data.object_distance_x = filters.object_distance_x_filter.update(raw.object_data.object_distance_x);
     filtered.object_data.object_distance_y = filters.object_distance_y_filter.update(raw.object_data.object_distance_y);
     filtered.arm_strength = filtered.arm_velocity * raw.object_data.object_mass;
-
-    let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 100.0)
-        || detect_anomaly(filtered.wrist.wrist_x, 0.0, 1.0)
-        || detect_anomaly(filtered.wrist.wrist_y, 0.0, 1.0)
+    
+    let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 50.0)
+        || detect_anomaly(filtered.wrist.wrist_x, 0.0, 12.0)
+        || detect_anomaly(filtered.wrist.wrist_y, -1.5, 1.5)
         || detect_anomaly(filtered.joints.shoulder_x, 0.0, 1.0)
-        || detect_anomaly(filtered.joints.shoulder_y, 0.0, 1.0)
-        || detect_anomaly(filtered.elbow.elbow_x, 0.0, 1.0)
-        || detect_anomaly(filtered.elbow.elbow_y, 0.0, 1.0);
+        || detect_anomaly(filtered.joints.shoulder_y, -1.5, 1.5)
+        || detect_anomaly(filtered.elbow.elbow_x, 0.0, 12.0)
+        || detect_anomaly(filtered.elbow.elbow_y, -1.5, 1.5)
+        || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
+        || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
+        || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
 
     (filtered, anomaly)
 }

@@ -19,7 +19,7 @@ pub mod controller;
 // pub use controller::simulate_controller;
 
 // src/lib.rs
-pub mod controller;
+// pub mod controller;
 
 // pub use actuator::simulate_actuator;
 // pub use controller::simulate_controller;
