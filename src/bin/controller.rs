@@ -24,7 +24,6 @@ fn now_micros() -> u128 {
         .as_micros()
 }
 
-
 fn detect_anomaly(value: f32, lower: f32, upper: f32) -> bool {
     value < lower || value > upper
 }
