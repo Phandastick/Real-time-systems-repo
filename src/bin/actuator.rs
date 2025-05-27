@@ -193,6 +193,6 @@ async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
     while let Some(sent_timestamp) = lat_rx.recv().await {
         let now = now_micros();
         let latency = now.saturating_sub(sent_timestamp);
-        println!("⚡ Latency: {} µs", latency);
+        println!("Latency: {} µs", latency);
     }
 }

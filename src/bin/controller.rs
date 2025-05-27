@@ -2,7 +2,7 @@ use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use rand::random;
 use serde_json;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use Real_time_systems_repo::data_structure::*;
@@ -11,37 +11,10 @@ use scheduled_thread_pool::ScheduledThreadPool;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
-const WINDOW_SIZE: usize = 5;
-
-#[derive(Debug, Clone)]
-struct MovingAverage {
-    buffer: [f32; WINDOW_SIZE],
-    index: usize,
-    sum: f32,
-    count: usize,
-}
-
-impl MovingAverage {
-    fn new() -> Self {
-        Self {
-            buffer: [0.0; WINDOW_SIZE],
-            index: 0,
-            sum: 0.0,
-            count: 0,
-        }
-    }
-
-    fn update(&mut self, val: f32) -> f32 {
-        if self.count < WINDOW_SIZE {
-            self.count += 1;
-        } else {
-            self.sum -= self.buffer[self.index];
-        }
-        self.buffer[self.index] = val;
-        self.sum += val;
-        self.index = (self.index + 1) % WINDOW_SIZE;
-        self.sum / self.count as f32
-    }
+struct FeedbackTracker {
+    expected: usize,
+    received: AtomicUsize,
+    notify_done: Arc<Notify>,
 }
 
 fn now_micros() -> u128 {
@@ -51,42 +24,6 @@ fn now_micros() -> u128 {
         .as_micros()
 }
 
-#[derive(Clone)]
-struct Filters {
-    wrist_x_filter: MovingAverage,
-    wrist_y_filter: MovingAverage,
-    shoulder_x_filter: MovingAverage,
-    shoulder_y_filter: MovingAverage,
-    elbow_x_filter: MovingAverage,
-    elbow_y_filter: MovingAverage,
-    arm_velocity_filter: MovingAverage,
-    object_velocity_filter: MovingAverage,
-    object_mass_filter: MovingAverage,
-    object_size_filter: MovingAverage,
-    object_x_filter: MovingAverage,
-    object_y_filter: MovingAverage,
-    object_height_filter: MovingAverage,
-}
-
-impl Filters {
-    fn new() -> Self {
-        Self {
-            wrist_x_filter: MovingAverage::new(),
-            wrist_y_filter: MovingAverage::new(),
-            shoulder_x_filter: MovingAverage::new(),
-            shoulder_y_filter: MovingAverage::new(),
-            elbow_x_filter: MovingAverage::new(),
-            elbow_y_filter: MovingAverage::new(),
-            arm_velocity_filter: MovingAverage::new(),
-            object_velocity_filter: MovingAverage::new(),
-            object_mass_filter: MovingAverage::new(),
-            object_size_filter: MovingAverage::new(),
-            object_x_filter: MovingAverage::new(),
-            object_y_filter: MovingAverage::new(),
-            object_height_filter: MovingAverage::new(),
-        }
-    }
-}
 
 fn detect_anomaly(value: f32, lower: f32, upper: f32) -> bool {
     value < lower || value > upper
@@ -242,10 +179,9 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
 }
 
 
-async fn consume_feedback(shutdown: Arc<Notify>) {
+async fn consume_feedback(shutdown: Arc<Notify>, tracker: Arc<FeedbackTracker>) {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await.expect("Connection error");
-
     let channel = conn.create_channel().await.expect("Channel creation error");
 
     channel.queue_declare(
@@ -268,15 +204,13 @@ async fn consume_feedback(shutdown: Arc<Notify>) {
             maybe_delivery = consumer.next() => {
                 if let Some(Ok(delivery)) = maybe_delivery {
                     let payload = &delivery.data;
-                    let feedback: FeedbackData = match serde_json::from_slice(payload) {
-                        Ok(fb) => fb,
-                        Err(e) => {
-                            eprintln!("Failed to deserialize feedback: {:?}", e);
-                            delivery.nack(Default::default()).await.expect("Failed to nack");
-                            continue;
+                    if let Ok(feedback) = serde_json::from_slice::<FeedbackData>(payload) {
+                        println!("Received feedback: {:?}", feedback);
+                        let prev = tracker.received.fetch_add(1, Ordering::SeqCst);
+                        if prev + 1 == tracker.expected {
+                            tracker.notify_done.notify_waiters();
                         }
-                    };
-                    println!("Received feedback: {:?}", feedback);
+                    }
                     delivery.ack(Default::default()).await.expect("Failed to ack");
                 } else {
                     break;
@@ -288,15 +222,21 @@ async fn consume_feedback(shutdown: Arc<Notify>) {
             }
         }
     }
-
-    println!("Feedback consumer exiting cleanly.");
 }
+
 
 #[tokio::main]
 async fn main() {
     let pool = ScheduledThreadPool::new(4);
     let cycle = Arc::new(Mutex::new(1u64));
     let max_cycles = 10u64;
+    let expected_feedbacks = max_cycles as usize;
+    let feedback_done_notify = Arc::new(Notify::new());
+    let tracker = Arc::new(FeedbackTracker {
+        expected: expected_feedbacks,
+        received: AtomicUsize::new(0),
+        notify_done: feedback_done_notify.clone(),
+    });
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
@@ -306,7 +246,11 @@ async fn main() {
     let shutdown_notify_producer = Arc::clone(&shutdown_notify);
     let feedback_shutdown = Arc::new(Notify::new());
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
-
+    let tracker_clone = tracker.clone(); // assuming `tracker` is already declared
+    
+    let feedback_handle = tokio::spawn(async move {
+        consume_feedback(feedback_shutdown_consumer, tracker_clone).await;
+    });
     pool.execute_at_fixed_rate(Duration::from_millis(0), Duration::from_millis(10), move || {
         let mut c = cycle_clone.lock().unwrap();
         if *c > max_cycles {
@@ -360,10 +304,6 @@ async fn main() {
             ).await.expect("Publish failed").await.expect("Confirmation failed");
         }
         println!("Publisher exiting cleanly.");
-    });
-
-    let feedback_handle = tokio::spawn(async move {
-        consume_feedback(feedback_shutdown_consumer).await;
     });
 
     shutdown_notify.notified().await;
