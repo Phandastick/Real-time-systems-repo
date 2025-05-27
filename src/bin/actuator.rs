@@ -8,7 +8,7 @@ use Real_time_systems_repo::{data_structure::*, now_micros};
 
 #[tokio::main]
 //start function
-pub async fn start() {
+pub async fn main() {
     let channel = create_channel().await;
 
     //thread 1: simulate arm
@@ -72,7 +72,7 @@ async fn consume_sensor_data(channel: Channel) {
 
         let payload = &delivery.data;
 
-        let sensor_data: SensorArmData = match serde_json::from_slice(payload) {
+        let mut sensor_data: SensorArmData = match serde_json::from_slice(payload) {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("Failed to deserialize sensor data: {:?}", e);
@@ -94,8 +94,36 @@ async fn consume_sensor_data(channel: Channel) {
     }
 }
 
-async fn control_arm(channel: &Channel, data: SensorArmData) {
+async fn control_arm(channel: &Channel, mut data: SensorArmData) {
     println!("Executing control for sensor data: {:?}", data);
+
+    // calculate time to reach wrist
+    let reach_time = if data.object_data.object_velocity > 0.0 {
+        data.object_data.object_distance / data.object_data.object_velocity
+    } else {
+        0.0
+    };
+
+    // move arm to track object
+    let horizontal_displacement = data.object_data.object_velocity * reach_time;
+
+    // Target positions
+    let target_x = horizontal_displacement;
+    let target_y = 0.0; // At arm's level
+
+    // Step 3: Set joint positions to match the predicted wrist position
+    // Shoulder affects x, elbow affects y
+    data.joints.shoulder_x = target_x;
+    data.elbow.elbow_y = target_y;
+
+    // Step 4: Update wrist based on new joint positions
+    data.wrist.wrist_x = data.joints.shoulder_x;
+    data.wrist.wrist_y = data.elbow.elbow_y;
+
+    println!(
+        "Arm moved to track object at predicted (x={}, y={})",
+        target_x, target_y
+    );
 
     send_feedback(channel, data).await;
 }

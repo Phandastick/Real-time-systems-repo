@@ -105,6 +105,8 @@ impl SensorArmData {
                 object_mass: 0.0,
                 object_size: 0.0,
                 object_distance: 0.0,
+                object_x: 0.0,
+                object_y: 0.0,
             },
             wrist: feedback.wrist,
             joints: feedback.joints,
