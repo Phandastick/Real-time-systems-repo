@@ -93,12 +93,14 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
                 continue;
             }
         };
+        // Timestamp immediately upon receiving message
+        let receive_time = now_micros();
 
-        // send timestamp for latency logging
-        let _ = lat_tx.send(sensor_data.timestamp);
+        // Process and send response
+        control_arm(&channel, sensor_data, receive_time).await;
 
-        // Process the sensor data
-        control_arm(&channel, sensor_data).await;
+        // Optional: log latency externally
+        let _ = lat_tx.send(receive_time);
 
         delivery
             .ack(Default::default())
@@ -107,7 +109,7 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
     }
 }
 
-async fn control_arm(channel: &Channel, mut data: SensorArmData) {
+async fn control_arm(channel: &Channel, mut data: SensorArmData, receive_time: u128) {
     println!("Executing control for sensor data: {:?}", data);
 
     let target_x = data.object_data.object_x;
@@ -157,6 +159,18 @@ async fn control_arm(channel: &Channel, mut data: SensorArmData) {
 
     data.wrist.wrist_x = wrist_x;
     data.wrist.wrist_y = wrist_y;
+
+    // Timestamp when computation ends
+    let compute_done_time = now_micros();
+
+    data.timestamp = compute_done_time;
+
+    // Internal latency: time spent from receiving to finishing computation
+    let internal_latency = compute_done_time.saturating_sub(receive_time);
+    println!(
+        ">> Internal actuator processing latency: {} µs",
+        internal_latency
+    );
 
     println!(
         "Arm moved to catch object at target (x={}, y={}) with elbow at ({:.2}, {:.2}) and wrist at ({:.2}, {:.2})",
