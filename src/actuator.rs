@@ -34,6 +34,13 @@
 //         .basic_qos(1, BasicQosOptions::default())
 //         .await
 //         .expect("Failed to set QoS");
+//     // Create a channel
+//     let channel = conn.create_channel().await.expect("Channel creation error");
+//     // limit batching and buffering latency
+//     channel
+//         .basic_qos(1, BasicQosOptions::default())
+//         .await
+//         .expect("Failed to set QoS");
 
 //     // Declare the queue (must match the producer queue name)
 //     channel
@@ -71,6 +78,7 @@
 //         };
 
 //         let payload = &delivery.data;
+//         let payload = &delivery.data;
 
 //         let sensor_data: SensorData = match serde_json::from_slice(payload) {
 //             Ok(data) => data,
@@ -105,7 +113,21 @@
 //     };
 
 //     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
+//     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
 
+//     // Send to feedback queue (sensor listens here)
+//     channel
+//         .basic_publish(
+//             "",
+//             "feedback_to_sensor", // Sensor should consume from this
+//             BasicPublishOptions::default(),
+//             &payload,
+//             BasicProperties::default(),
+//         )
+//         .await
+//         .expect("Failed to publish feedback")
+//         .await
+//         .expect("Failed to confirm feedback delivery");
 //     // Send to feedback queue (sensor listens here)
 //     channel
 //         .basic_publish(

@@ -1,5 +1,10 @@
-use crate::now_micros;
-
+pub fn now_micros() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_micros()
+}
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SensorArmData {
     pub object_data: ObjectData,
@@ -19,9 +24,8 @@ pub struct ObjectData {
     pub object_velocity: f32,
     pub object_mass: f32,
     pub object_size: f32,
-    pub object_distance: f32, //height from robotic arm
-    pub object_x: f32,        // x position of the object
-    pub object_y: f32,        // y position of the object
+    pub object_distance_x: f32,
+    pub object_distance_y: f32,
 }
 
 //stored in sensor
