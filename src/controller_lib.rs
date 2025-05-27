@@ -1,8 +1,6 @@
-use crate::data_structure::*;
-use rand::random;
+use crate::data_structure::{now_micros, ObjectData, SensorArmData};
 
-// PUT CONTROLLER LOGIC TO BE CALLED IN LIB.rs
-// TRY TO NOT CLUTTER THE lib.rs FILE PLEASEEEEE
+use rand::random;
 
 pub fn generate_sensor_data(cycle: u64) -> SensorArmData {
     let object_data = if cycle % 10 == 0 {

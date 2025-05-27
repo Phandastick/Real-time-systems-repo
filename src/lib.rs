@@ -2,7 +2,10 @@ pub mod data_structure;
 use data_structure::*;
 
 pub mod actuator_lib;
+use actuator_lib::*;
+
 pub mod controller_lib;
+use controller_lib::*;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -262,13 +262,7 @@ async fn main() {
     let shutdown_notify_producer = Arc::clone(&shutdown_notify);
     let feedback_shutdown = Arc::new(Notify::new());
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
-<<<<<<< Updated upstream
-    let tracker_clone = tracker.clone(); // assuming `tracker` is already declared
-    
-=======
     let tracker_clone = tracker.clone();
-
->>>>>>> Stashed changes
     let feedback_handle = tokio::spawn(async move {
         consume_feedback(feedback_shutdown_consumer, tracker_clone).await;
     });
