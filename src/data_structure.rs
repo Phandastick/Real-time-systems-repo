@@ -24,9 +24,8 @@ pub struct ObjectData {
     pub object_velocity: f32,
     pub object_mass: f32,
     pub object_size: f32,
-    pub object_distance: f32, //height from robotic arm
-    pub object_x: f32,        // x position of the object
-    pub object_y: f32,        // y position of the object
+    pub object_distance_x: f32,
+    pub object_distance_y: f32,
 }
 
 //stored in sensor
@@ -109,7 +108,8 @@ impl SensorArmData {
                 object_velocity: 0.0,
                 object_mass: 0.0,
                 object_size: 0.0,
-                object_distance: 0.0,
+                object_distance_x: 0.0,
+                object_distance_y: 0.0,
             },
             wrist: feedback.wrist,
             joints: feedback.joints,
