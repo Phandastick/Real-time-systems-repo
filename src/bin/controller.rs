@@ -11,13 +11,81 @@ use scheduled_thread_pool::ScheduledThreadPool;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
+const WINDOW_SIZE: usize = 5;
 
+#[derive(Debug, Clone)]
+struct MovingAverage {
+    buffer: [f32; WINDOW_SIZE],
+    index: usize,
+    sum: f32,
+    count: usize,
+}
+
+impl MovingAverage {
+    fn new() -> Self {
+        Self {
+            buffer: [0.0; WINDOW_SIZE],
+            index: 0,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+
+    fn update(&mut self, val: f32) -> f32 {
+        if self.count < WINDOW_SIZE {
+            self.count += 1;
+        } else {
+            self.sum -= self.buffer[self.index];
+        }
+        self.buffer[self.index] = val;
+        self.sum += val;
+        self.index = (self.index + 1) % WINDOW_SIZE;
+        self.sum / self.count as f32
+    }
+}
 
 fn now_micros() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_micros()
+}
+
+#[derive(Clone)]
+struct Filters {
+    wrist_x_filter: MovingAverage,
+    wrist_y_filter: MovingAverage,
+    shoulder_x_filter: MovingAverage,
+    shoulder_y_filter: MovingAverage,
+    elbow_x_filter: MovingAverage,
+    elbow_y_filter: MovingAverage,
+    arm_velocity_filter: MovingAverage,
+    object_velocity_filter: MovingAverage,
+    object_mass_filter: MovingAverage,
+    object_size_filter: MovingAverage,
+    object_x_filter: MovingAverage,
+    object_y_filter: MovingAverage,
+    object_height_filter: MovingAverage,
+}
+
+impl Filters {
+    fn new() -> Self {
+        Self {
+            wrist_x_filter: MovingAverage::new(),
+            wrist_y_filter: MovingAverage::new(),
+            shoulder_x_filter: MovingAverage::new(),
+            shoulder_y_filter: MovingAverage::new(),
+            elbow_x_filter: MovingAverage::new(),
+            elbow_y_filter: MovingAverage::new(),
+            arm_velocity_filter: MovingAverage::new(),
+            object_velocity_filter: MovingAverage::new(),
+            object_mass_filter: MovingAverage::new(),
+            object_size_filter: MovingAverage::new(),
+            object_x_filter: MovingAverage::new(),
+            object_y_filter: MovingAverage::new(),
+            object_height_filter: MovingAverage::new(),
+        }
+    }
 }
 
 fn detect_anomaly(value: f32, lower: f32, upper: f32) -> bool {
