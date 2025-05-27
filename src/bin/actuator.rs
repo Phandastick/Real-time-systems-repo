@@ -5,10 +5,12 @@ use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProper
 use serde_json;
 use std::f32::consts::PI;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
-fn main() {
-    start();
+#[tokio::main]
+async fn main() {
+    start().await;
 }
 
 //start function
@@ -18,11 +20,11 @@ pub async fn start() {
     // Set up mpsc channel for latency logging
     let (lat_tx, lat_rx) = mpsc::unbounded_channel();
 
-    // Thread 1: Simulate arm
-    tokio::spawn(consume_sensor_data(channel.clone(), lat_tx));
-
     // Thread 2: Log latency
     tokio::spawn(start_latency(lat_rx));
+
+    // Thread 1: Simulate arm
+    let _ = tokio::spawn(consume_sensor_data(channel.clone(), lat_tx)).await;
 }
 
 async fn create_channel() -> Channel {
