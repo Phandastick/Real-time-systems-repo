@@ -72,6 +72,8 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
     println!("> Actuator is ready to receive sensor data...");
 
     while let Some(delivery) = consumer.next().await {
+        let cycle_start_time = now_micros();
+
         let delivery = match delivery {
             Ok(d) => d,
             Err(e) => {
@@ -94,11 +96,23 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
             }
         };
 
-        // Process and send response
-        control_arm(&channel, sensor_data, receive_time).await;
+        total_msgs += 1;
+        // lat_tx
+        //     .send(sensor_data.timestamp)
+        //     .await
+        //     .expect("Failed to send receive time for latency calculation");
+        let receive_time = now_micros();
 
-        // Process the sensor data
-        control_arm(&channel, sensor_data).await;
+        // Process and send response
+        control_arm(
+            &channel,
+            sensor_data,
+            receive_time,
+            &shoulder_tx,
+            &elbow_tx,
+            cycle_start_time,
+        )
+        .await;
 
         delivery
             .ack(Default::default())
@@ -107,15 +121,23 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
     }
 }
 
-async fn control_arm(channel: &Channel, mut data: SensorArmData, receive_time: u128) {
-    println!("Executing control for sensor data: {:?}", data);
+async fn control_arm(
+    channel: &Channel,
+    mut data: SensorArmData,
+    receive_time: u128,
+    shoulder_tx: &mpsc::UnboundedSender<ShoulderData>,
+    elbow_tx: &mpsc::UnboundedSender<ElbowData>,
+    cycle_start_time: u128,
+) {
+    // println!("Executing control for sensor data: {:?}", data);
 
-    let target_x = data.object_data.object_x;
-    let target_y = data.object_data.object_y;
+    // target never goes negative x
+    let mut target_x = data.object_data.object_x;
+    let mut target_y = data.object_data.object_y;
 
     // Arm segment lengths
-    let l1 = 10.0; // shoulder to elbow
-    let l2 = 10.0; // elbow to wrist
+    let l1 = 3.0; // shoulder to elbow
+    let l2 = 3.0; // elbow to wrist
 
     // Distance to target from shoulder (0, 0)
     let dist = (target_x.powi(2) + target_y.powi(2)).sqrt();
@@ -175,10 +197,13 @@ async fn control_arm(channel: &Channel, mut data: SensorArmData, receive_time: u
         target_x, target_y, elbow_x, elbow_y, wrist_x, wrist_y
     );
 
-    send_feedback(channel, data).await;
+    send_feedback(channel, data, cycle_start_time).await;
 }
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
+pub async fn send_feedback(channel: &Channel, mut data: SensorArmData, cycle_start_time: u128) {
+    // log time done  for feedback AFTER actuator processing
+    data.timestamp = now_micros();
+
     let feedback = data.to_feedback();
 
     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
@@ -197,6 +222,10 @@ pub async fn send_feedback(channel: &Channel, data: SensorArmData) {
         .expect("Failed to confirm feedback delivery");
 
     println!("> Sent feedback to sensor: {:?}", feedback);
+    println!(
+        "> Cycle time: {} µs",
+        now_micros().saturating_sub(cycle_start_time)
+    );
 }
 
 async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
