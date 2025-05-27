@@ -2,20 +2,14 @@ use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use rand::random;
 use serde_json;
 use std::{
-    sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex},
+    sync::{atomic::{AtomicUsize, Ordering}, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use Real_time_systems_repo::data_structure::*;
 use futures_util::stream::StreamExt;
-use scheduled_thread_pool::ScheduledThreadPool;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
-
-struct FeedbackTracker {
-    expected: usize,
-    received: AtomicUsize,
-    notify_done: Arc<Notify>,
-}
+use tokio::sync::Mutex;
 
 fn now_micros() -> u128 {
     SystemTime::now()
@@ -43,16 +37,15 @@ fn generate_anomalous_object_data() -> ObjectData {
 
         // distance changes due to the object being let go at different areas of the tube, where tube is a circle with diameter of 3cm
         // anomaly: object is placed very close or far off, like a hand waving or blocking the tube
-        object_x: 2.5 + random::<f32>() * 3.0, // 2.5–5.5 cm (outside normal tube center)
+        object_x: 7.0 + random::<f32>() * 3.0, 
 
-        // -1.5 to 1.5, but hand might extend further
-        object_y: -2.0 + random::<f32>() * 4.0, // -2.0 to +2.0 (possibly out of vertical bounds)
+        object_y: 7.0 + random::<f32>() * 4.0,
 
         object_height: 0.0,
     }
 }
 
-fn generate_sensor_data(cycle: u64) -> SensorArmData {
+async fn generate_sensor_data(cycle: u64, shared_feedback: Arc<Mutex<Option<FeedbackData>>>) -> SensorArmData {
     let object_data = if cycle % 10 == 0 {
         // Every 10th cycle, simulate an anomaly (like hand)
         generate_anomalous_object_data()
@@ -74,9 +67,10 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
             //where x is front back y is left right
             //max object distance is 3cm(diameter of tube) for x and y so 4cm is a good range if accounting for some wind 
             //range of 0-3 in addition to max length of arm
-            object_x: random::<f32>() * 3.0,
-            //-1.5 to 1.5
-            object_y: (random::<f32>() * 3.0) - 1.5,
+            //tube infront by 4
+            object_x: 4.0 + random::<f32>() * 3.0,
+            //-5 to 5
+            object_y: (random::<f32>() * 10.0) - 5.0,
             //object height is the distance from the top of the tube to the object
             //calculated later based on arm
             object_height: 0.0, 
@@ -86,14 +80,6 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
     let mut sensor_data = SensorArmData::new(object_data.clone());
     sensor_data.update_object_data(object_data);
 
-    //using forward kinematics to calculate arm positions
-
-    //wrist length > elbow length > shoulder length
-    //shoulder is the base of the arm, so it is the least variable
-    //shoulder length can vary from 0cm to 1cm
-    sensor_data.joints.shoulder_x = random::<f32>() * 1.0;
-    sensor_data.joints.shoulder_y = (random::<f32>() * 3.0) - 1.5; // y: [-1.5, 1.5]
-
     //realistic segment lengths (upper and lower arm)
     //l1 = shoulder to elbow (1–4cm), l2 = elbow to wrist (4–7cm)
     let l1 = 1.0 + random::<f32>() * 3.0; // 1cm base + 0–3cm range = 1–4cm
@@ -102,29 +88,44 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
     //limit shoulder angle to forward-facing only, so wrist stays in x ≥ 0
     //angle from 0 (right) to π (left), but we clamp it to [0, π/2] for safe forward-right region
     let theta1 = random::<f32>() * std::f32::consts::FRAC_PI_2; // [0, π/2]
-
     //elbow bend ±90°, so -π/2 to π/2 range is OK
     let theta2 = (random::<f32>() - 0.5) * std::f32::consts::PI;
-
-    //using FK to get elbow position from shoulder + angle + l1
-    //this models the upper arm segment
-    sensor_data.elbow.elbow_x = sensor_data.joints.shoulder_x + l1 * theta1.cos();
-    sensor_data.elbow.elbow_y = sensor_data.joints.shoulder_y + l1 * theta1.sin();
-    sensor_data.elbow.elbow_y = sensor_data.elbow.elbow_y.clamp(-1.5, 1.5); // constrain y range
-
-    //wrist is the end of the forearm, which bends at the elbow
-    //direction is based on total angle (shoulder + elbow joint)
-    sensor_data.wrist.wrist_x = sensor_data.elbow.elbow_x + l2 * (theta1 + theta2).cos();
-    sensor_data.wrist.wrist_y = sensor_data.elbow.elbow_y + l2 * (theta1 + theta2).sin();
-
-    // clamp wrist_x to ≥ shoulder_x
-    if sensor_data.wrist.wrist_x < sensor_data.joints.shoulder_x {
-        sensor_data.wrist.wrist_x = sensor_data.joints.shoulder_x;
+    let guard = shared_feedback.lock().await;
+    if let Some(feedback) = &*guard {
+            sensor_data.joints.shoulder_x = feedback.joints.shoulder_x;
+            sensor_data.joints.shoulder_y = feedback.joints.shoulder_y;
+            sensor_data.elbow.elbow_x = feedback.elbow.elbow_x;
+            sensor_data.elbow.elbow_y = feedback.elbow.elbow_y;
+            sensor_data.wrist.wrist_x = feedback.wrist.wrist_x;
+            sensor_data.wrist.wrist_y = feedback.wrist.wrist_y;
     }
+    else {
+        //using forward kinematics to calculate arm positions
+        //wrist length > elbow length > shoulder length
+        //shoulder is the base of the arm, so it is the least variable
+        //shoulder length can vary from 0cm to 1cm
+        sensor_data.joints.shoulder_x = random::<f32>() * 1.0;
+        sensor_data.joints.shoulder_y = (random::<f32>() * 3.0) - 1.5; // y: [-1.5, 1.5]
+        //using FK to get elbow position from shoulder + angle + l1
+        //this models the upper arm segment
+        sensor_data.elbow.elbow_x = sensor_data.joints.shoulder_x + l1 * theta1.cos();
+        sensor_data.elbow.elbow_y = sensor_data.joints.shoulder_y + l1 * theta1.sin();
+        sensor_data.elbow.elbow_y = sensor_data.elbow.elbow_y.clamp(-1.5, 1.5); // constrain y range
 
-    // clamp wrist_y to [-1.5, 1.5]
-    sensor_data.wrist.wrist_y = sensor_data.wrist.wrist_y.clamp(-1.5, 1.5);
+        //wrist is the end of the forearm, which bends at the elbow
+        //direction is based on total angle (shoulder + elbow joint)
+        sensor_data.wrist.wrist_x = sensor_data.elbow.elbow_x + l2 * (theta1 + theta2).cos();
+        sensor_data.wrist.wrist_y = sensor_data.elbow.elbow_y + l2 * (theta1 + theta2).sin();
 
+        // clamp wrist_x to ≥ shoulder_x
+        if sensor_data.wrist.wrist_x < sensor_data.joints.shoulder_x {
+            sensor_data.wrist.wrist_x = sensor_data.joints.shoulder_x;
+        }
+
+        // clamp wrist_y to [-1.5, 1.5]
+        sensor_data.wrist.wrist_y = sensor_data.wrist.wrist_y.clamp(-1.5, 1.5);
+
+    }
     //suggested arm velocity to catch object
     sensor_data.arm_velocity = random::<f32>() * 10.0;
 
@@ -132,8 +133,8 @@ fn generate_sensor_data(cycle: u64) -> SensorArmData {
     //assuming velocity is proportional to acceleration here
     sensor_data.arm_strength = sensor_data.arm_velocity * sensor_data.object_data.object_mass;
     sensor_data.object_data.object_height = sensor_data.joints.shoulder_y + l1 * theta1.sin() + l2 * (theta1 + theta2).sin();
-    sensor_data.timestamp = now_micros();
-
+    sensor_data.timestamp = now_micros();  
+      
     sensor_data
 }
 
@@ -164,12 +165,12 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
 
     // Anomaly detection thresholds
     let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 50.0)
-        || detect_anomaly(filtered.wrist.wrist_x, 0.0, 12.0)
-        || detect_anomaly(filtered.wrist.wrist_y, -1.5, 1.5)
-        || detect_anomaly(filtered.joints.shoulder_x, 0.0, 1.0)
-        || detect_anomaly(filtered.joints.shoulder_y, -1.5, 1.5)
-        || detect_anomaly(filtered.elbow.elbow_x, 0.0, 12.0)
-        || detect_anomaly(filtered.elbow.elbow_y, -1.5, 1.5)
+        || detect_anomaly(filtered.wrist.wrist_x, 0.0, 7.0)
+        || detect_anomaly(filtered.wrist.wrist_y, -7.0, 7.0)
+        || detect_anomaly(filtered.joints.shoulder_x, 0.0, 7.0)
+        || detect_anomaly(filtered.joints.shoulder_y, -7.0, 7.0)
+        || detect_anomaly(filtered.elbow.elbow_x, 0.0, 7.0)
+        || detect_anomaly(filtered.elbow.elbow_y, -7.0, 7.0)
         || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
         || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
         || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
@@ -178,7 +179,7 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
 }
 
 
-async fn consume_feedback(shutdown: Arc<Notify>, tracker: Arc<FeedbackTracker>) {
+async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Option<FeedbackData>>>) {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await.expect("Connection error");
     let channel = conn.create_channel().await.expect("Channel creation error");
@@ -205,10 +206,8 @@ async fn consume_feedback(shutdown: Arc<Notify>, tracker: Arc<FeedbackTracker>) 
                     let payload = &delivery.data;
                     if let Ok(feedback) = serde_json::from_slice::<FeedbackData>(payload) {
                         println!("Received feedback: {:?}", feedback);
-                        let prev = tracker.received.fetch_add(1, Ordering::SeqCst);
-                        if prev + 1 == tracker.expected {
-                            tracker.notify_done.notify_waiters();
-                        }
+                        let mut shared = shared_feedback.lock().await;
+                        *shared = Some(feedback);
                     }
                     delivery.ack(Default::default()).await.expect("Failed to ack");
                 } else {
@@ -223,59 +222,62 @@ async fn consume_feedback(shutdown: Arc<Notify>, tracker: Arc<FeedbackTracker>) 
     }
 }
 
-
 #[tokio::main]
 async fn main() {
-    let pool = ScheduledThreadPool::new(4);
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 10u64;
-    let expected_feedbacks = max_cycles as usize;
-    let feedback_done_notify = Arc::new(Notify::new());
-    let tracker = Arc::new(FeedbackTracker {
-        expected: expected_feedbacks,
-        received: AtomicUsize::new(0),
-        notify_done: feedback_done_notify.clone(),
-    });
+    let max_cycles = 10_000u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
     let tx_blocking = tx_processed.clone();
     let cycle_clone = Arc::clone(&cycle);
     let shutdown_notify = Arc::new(Notify::new());
-    let shutdown_notify_producer = Arc::clone(&shutdown_notify);
     let feedback_shutdown = Arc::new(Notify::new());
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
-    let tracker_clone = tracker.clone(); 
-    
+    let shared_feedback = Arc::new(Mutex::new(None::<FeedbackData>));
+    let shared_feedback_for_feedback = Arc::clone(&shared_feedback);
+    let shared_feedback_for_sensor = Arc::clone(&shared_feedback);
+
     let feedback_handle = tokio::spawn(async move {
-        consume_feedback(feedback_shutdown_consumer, tracker_clone).await;
+        consume_feedback(feedback_shutdown_consumer, shared_feedback_for_feedback).await;
     });
-    pool.execute_at_fixed_rate(Duration::from_millis(0), Duration::from_millis(10), move || {
-        let mut c = cycle_clone.lock().unwrap();
-        if *c > max_cycles {
-            shutdown_notify_producer.notify_waiters();
-            return;
-        }
 
-        let current_cycle = *c;
-        *c += 1;
+    // sensor generation task using tokio interval
+    let sensor_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
 
-        let data = generate_sensor_data(current_cycle);
-        let mut filters = shared_filters_clone.lock().unwrap();
-        let (processed, anomaly) = process_sensor_data(data, &mut filters);
+        // inside sensor_task
+        loop {
+            interval.tick().await;
 
-        if anomaly {
-            // Only log anomaly, don't send data
-            println!("Anomaly detected in cycle {}: {:?}", current_cycle, processed);
-        } else {
-            // No anomaly: send data
-            println!(
-                "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
-                current_cycle, processed.arm_strength, anomaly
-            );
+            let mut c = cycle_clone.lock().await;
+            if *c > max_cycles {
+                // do NOT notify shutdown here!
+                break; // just break to finish task cleanly
+            }
 
-            if let Err(e) = tx_blocking.try_send(processed) {
-                eprintln!("Failed to send processed data: {}", e);
+            let current_cycle = *c;
+            *c += 1;
+            let shared_feedback_clone = Arc::clone(&shared_feedback_for_sensor);
+            let data = generate_sensor_data(current_cycle, shared_feedback_clone).await;
+            let mut filters = shared_filters_clone.lock().await;
+            let (processed, anomaly) = process_sensor_data(data, &mut filters);
+
+            if anomaly {
+                println!("Anomaly detected in cycle {}: {:?}", current_cycle, processed);
+                //remove extreme value
+                filters.reset();
+            } else {
+                println!(
+                    "cycle {:03}, arm_strength: {:.2}, anomaly: {}",
+                    current_cycle, processed.arm_strength, anomaly
+                );
+
+                // use .send().await to wait for channel capacity instead of try_send
+                if let Err(e) = tx_blocking.send(processed).await {
+                    eprintln!("Failed to send processed data: {}", e);
+                    break; // if receiver dropped, break out
+                }
             }
         }
     });
@@ -302,16 +304,22 @@ async fn main() {
                 Default::default(),
             ).await.expect("Publish failed").await.expect("Confirmation failed");
         }
+
         println!("Publisher exiting cleanly.");
     });
 
-    shutdown_notify.notified().await;
-    println!("All cycles processed. Cleaning up...");
-    drop(pool);
+    sensor_task.await.expect("Sensor task panicked");
+
+    // after sensor task finishes, close channel by dropping sender
     drop(tx_processed);
+
+    // now notify shutdown so publisher and feedback consumer can stop
+    shutdown_notify.notify_waiters();
     feedback_shutdown.notify_waiters();
 
+    // wait for publisher and feedback consumer
     publisher_handle.await.expect("Publisher panicked");
     feedback_handle.await.expect("Feedback panicked");
+
     println!("Shutdown complete. Exiting.");
 }
