@@ -20,8 +20,8 @@ pub async fn start() {
     // Set up mpsc channel for latency logging
     let (lat_tx, lat_rx) = mpsc::unbounded_channel();
     // channels for joint tasks
-    let (shoulder_tx, mut shoulder_rx) = mpsc::unbounded_channel::<ShoulderData>();
-    let (elbow_tx, mut elbow_rx) = mpsc::unbounded_channel::<ElbowData>();
+    let (shoulder_tx, mut shoulder_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
+    let (elbow_tx, mut elbow_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
 
     // Thread 2: Log latency
     tokio::spawn(start_latency(lat_rx));
@@ -83,8 +83,8 @@ async fn create_channel() -> Channel {
 async fn consume_sensor_data(
     channel: Channel,
     lat_tx: mpsc::UnboundedSender<u128>,
-    shoulder_tx: mpsc::UnboundedSender<ShoulderData>,
-    elbow_tx: mpsc::UnboundedSender<ElbowData>,
+    shoulder_tx: mpsc::UnboundedSender<ActuatorInstruction>,
+    elbow_tx: mpsc::UnboundedSender<ActuatorInstruction>,
 ) {
     let mut consumer: Consumer = channel
         .basic_consume(
@@ -126,7 +126,6 @@ async fn consume_sensor_data(
                 continue;
             }
         };
-
         total_msgs += 1;
         lat_tx
             .send(sensor_data.timestamp)
@@ -155,12 +154,11 @@ async fn control_arm(
     channel: &Channel,
     mut data: SensorArmData,
     receive_time: u128,
-    shoulder_tx: &mpsc::UnboundedSender<ShoulderData>,
-    elbow_tx: &mpsc::UnboundedSender<ElbowData>,
+    shoulder_tx: &mpsc::UnboundedSender<ActuatorInstruction>,
+    elbow_tx: &mpsc::UnboundedSender<ActuatorInstruction>,
     cycle_start_time: u128,
 ) {
     // println!("Executing control for sensor data: {:?}", data);
-
     // target never goes negative x
     let mut target_x = data.object_data.object_x;
     let mut target_y = data.object_data.object_y;
@@ -210,29 +208,57 @@ async fn control_arm(
     data.wrist.wrist_x = wrist_x;
     data.wrist.wrist_y = wrist_y;
 
-    let _ = shoulder_tx.send(ShoulderData {
-        shoulder_x: shoulder_x,
-        shoulder_y: shoulder_y,
+    // === NEW: Estimate time until object reaches ground ===
+    let object_height = data.object_data.object_height;
+    let object_velocity = data.object_data.object_velocity;
+
+    let time_to_reach = if object_velocity > 0.0 {
+        (object_height / object_velocity).round() as u128
+    } else {
+        println!(
+            "[WARNING] Object velocity is zero or negative ({}). Cannot compute time to reach.",
+            object_velocity
+        );
+        0
+    };
+
+    println!("> Estimated time to reach ground: {} µs", time_to_reach);
+
+    let _ = shoulder_tx.send(ActuatorInstruction {
+        x: shoulder_x,
+        y: shoulder_y,
+        strength: data.arm_strength,
+        time_to_reach: time_to_reach,
+        timestamp: now_micros(),
     });
-    let _ = elbow_tx.send(ElbowData {
-        elbow_x: elbow_x,
-        elbow_y: elbow_y,
+    let _ = elbow_tx.send(ActuatorInstruction {
+        x: elbow_x,
+        y: elbow_y,
+        strength: data.arm_strength,
+        time_to_reach: time_to_reach,
+        timestamp: now_micros(),
     });
 
     let compute_done_time = now_micros();
+    let arrived_at_ground = compute_done_time + time_to_reach;
 
     // Internal latency: time spent from receiving to finishing computation
     let internal_latency = compute_done_time.saturating_sub(receive_time);
     println!("> Actuator process latency: {} µs", internal_latency);
 
-    send_feedback(channel, data, cycle_start_time).await;
+    send_feedback(channel, data, arrived_at_ground, cycle_start_time).await;
 }
 /// Simulates sending feedback from actuator to sensor.
-pub async fn send_feedback(channel: &Channel, mut data: SensorArmData, cycle_start_time: u128) {
+pub async fn send_feedback(
+    channel: &Channel,
+    mut data: SensorArmData,
+    arrived_at_ground: u128,
+    cycle_start_time: u128,
+) {
     // log time done  for feedback AFTER actuator processing
     data.timestamp = now_micros();
 
-    let feedback = data.to_feedback();
+    let feedback = data.to_feedback(arrived_at_ground);
 
     let payload = serde_json::to_vec(&feedback).expect("Failed to serialize feedback");
 
