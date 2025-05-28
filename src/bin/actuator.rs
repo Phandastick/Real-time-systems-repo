@@ -4,8 +4,10 @@ use lapin::BasicProperties;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json;
 use std::f32::consts::PI;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::Barrier;
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
 #[tokio::main]
@@ -19,27 +21,45 @@ pub async fn start() {
 
     // Set up mpsc channel for latency logging
     let (lat_tx, lat_rx) = mpsc::unbounded_channel();
+    let (lat_shoulder_tx, lat_shoulder_rx) = mpsc::unbounded_channel();
+    let (lat_elbow_tx, lat_elbow_rx) = mpsc::unbounded_channel();
     // channels for joint tasks
     let (shoulder_tx, mut shoulder_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
     let (elbow_tx, mut elbow_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
 
+    let sync_barrier = Arc::new(Barrier::new(2)); // Two parties: shoulder and elbow
+
     // Thread 2: Log latency
-    tokio::spawn(start_latency(lat_rx));
+    tokio::spawn(start_latency(lat_rx, lat_elbow_rx, lat_shoulder_rx))
+        .await
+        .expect("Failed to spawn latency thread");
 
     //SPAWN SHOULDER JOINT, ELBOW JOINT THREADS and CHANNEL
     // shoudler thread
+    let shoulder_barrier = Arc::clone(&sync_barrier);
     tokio::spawn(async move {
         while let Some(pos) = shoulder_rx.recv().await {
+            let start_time = now_micros();
             println!("[SHOULDER] Moving to position: {:?}", pos);
-            // tokio::time::sleep(tokio::time::Duration::from_millis(1)).await; // simulate actuation time
+            tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            lat_shoulder_tx
+                .send(start_time)
+                .expect("Failed to send shoulder latency");
+            shoulder_barrier.wait().await; // wait for elbow to finish
         }
     });
 
     //elbow thread
+    let elbow_barrier = Arc::clone(&sync_barrier);
     tokio::spawn(async move {
         while let Some(pos) = elbow_rx.recv().await {
+            let start_time = now_micros();
             println!("[ELBOW] Moving to position: {:?}", pos);
-            // tokio::time::sleep(tokio::time::Duration::from_millis(1)).await; // simulate actuation time
+            tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            lat_elbow_tx
+                .send(start_time)
+                .expect("Failed to send shoulder latency");
+            elbow_barrier.wait().await; // wait for shoulder to finish
         }
     });
 
@@ -126,7 +146,13 @@ async fn consume_sensor_data(
                 continue;
             }
         };
+
+        // let reception_latency = now_micros().saturating_sub(sensor_data.timestamp);
+        // println!("> Reception Latency: {} µs", reception_latency);
+
         total_msgs += 1;
+        println!("> Message count: {:?}", total_msgs);
+
         lat_tx
             .send(sensor_data.timestamp)
             .expect("Failed to send receive time for latency calculation");
@@ -213,7 +239,7 @@ async fn control_arm(
     let object_velocity = data.object_data.object_velocity;
 
     let time_to_reach = if object_velocity > 0.0 {
-        (object_height / object_velocity).round() as u128
+        (object_height / object_velocity * 1000.00) as u64
     } else {
         println!(
             "[WARNING] Object velocity is zero or negative ({}). Cannot compute time to reach.",
@@ -222,7 +248,7 @@ async fn control_arm(
         0
     };
 
-    println!("> Estimated time to reach ground: {} µs", time_to_reach);
+    // println!("> Estimated time to reach ground: {} µs", time_to_reach);
 
     let _ = shoulder_tx.send(ActuatorInstruction {
         x: shoulder_x,
@@ -240,11 +266,11 @@ async fn control_arm(
     });
 
     let compute_done_time = now_micros();
-    let arrived_at_ground = compute_done_time + time_to_reach;
+    let arrived_at_ground = compute_done_time + time_to_reach as u128;
 
     // Internal latency: time spent from receiving to finishing computation
     let internal_latency = compute_done_time.saturating_sub(receive_time);
-    println!("> Actuator process latency: {} µs", internal_latency);
+    println!("> Calculation process latency: {} µs", internal_latency);
 
     send_feedback(channel, data, arrived_at_ground, cycle_start_time).await;
 }
@@ -282,12 +308,43 @@ pub async fn send_feedback(
     );
 }
 
-async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
+async fn start_latency(
+    mut lat_rx: mpsc::UnboundedReceiver<u128>,
+    mut lat_elbow_rx: mpsc::UnboundedReceiver<u128>,
+    mut lat_shoulder_rx: mpsc::UnboundedReceiver<u128>,
+) {
     println!("> Starting latency calculations...");
 
-    while let Some(sent_timestamp) = lat_rx.recv().await {
-        let now = now_micros();
-        let latency = now.saturating_sub(sent_timestamp);
-        println!("Reception Latency: {} µs", latency);
-    }
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        rt.block_on(async move {
+            while let Some(sent_timestamp) = lat_rx.recv().await {
+                let now = now_micros();
+                let latency = now.saturating_sub(sent_timestamp);
+                println!("Data Reception Latency: {} µs", latency);
+            }
+        });
+    });
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        rt.block_on(async move {
+            while let Some(sent_timestamp) = lat_elbow_rx.recv().await {
+                let now = now_micros();
+                let latency = now.saturating_sub(sent_timestamp);
+                println!("Actuator Elbow Latency: {} µs", latency);
+            }
+        });
+    });
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        rt.block_on(async move {
+            while let Some(sent_timestamp) = lat_shoulder_rx.recv().await {
+                let now = now_micros();
+                let latency = now.saturating_sub(sent_timestamp);
+                println!("Actuator Shoulder Latency: {} µs", latency);
+            }
+        });
+    });
 }

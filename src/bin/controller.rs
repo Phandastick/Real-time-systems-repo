@@ -254,7 +254,7 @@ async fn consume_feedback(
 #[tokio::main]
 async fn main() {
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 25u64;
+    let max_cycles = 1000u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);

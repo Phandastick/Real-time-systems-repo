@@ -102,12 +102,12 @@ pub struct ActuatorInstruction {
     pub x: f32,
     pub y: f32,
     pub strength: f32,
-    pub time_to_reach: u128,
+    pub time_to_reach: u64,
     pub timestamp: u128,
 }
 
 impl ActuatorInstruction {
-    pub fn new(x: f32, y: f32, strength: f32, time_to_reach: u128) -> Self {
+    pub fn new(x: f32, y: f32, strength: f32, time_to_reach: u64) -> Self {
         ActuatorInstruction {
             x,
             y,
