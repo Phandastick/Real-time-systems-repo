@@ -7,6 +7,7 @@ name = "Real-time-systems-repo"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fastrand 2.3.0",
  "futures-util",
  "get_user_input",
  "lapin",
