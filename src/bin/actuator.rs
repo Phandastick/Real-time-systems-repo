@@ -5,7 +5,7 @@ use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProper
 use serde_json;
 use std::f32::consts::PI;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use Real_time_systems_repo::{data_structure::*, now_micros};
 
 #[tokio::main]
@@ -19,12 +19,38 @@ pub async fn start() {
 
     // Set up mpsc channel for latency logging
     let (lat_tx, lat_rx) = mpsc::unbounded_channel();
+    // channels for joint tasks
+    let (shoulder_tx, mut shoulder_rx) = mpsc::unbounded_channel::<ShoulderData>();
+    let (elbow_tx, mut elbow_rx) = mpsc::unbounded_channel::<ElbowData>();
 
     // Thread 2: Log latency
     tokio::spawn(start_latency(lat_rx));
 
+    //SPAWN SHOULDER JOINT, ELBOW JOINT THREADS and CHANNEL
+    // shoudler thread
+    tokio::spawn(async move {
+        while let Some(pos) = shoulder_rx.recv().await {
+            println!("[SHOULDER] Moving to position: {:?}", pos);
+            // tokio::time::sleep(tokio::time::Duration::from_millis(1)).await; // simulate actuation time
+        }
+    });
+
+    //elbow thread
+    tokio::spawn(async move {
+        while let Some(pos) = elbow_rx.recv().await {
+            println!("[ELBOW] Moving to position: {:?}", pos);
+            // tokio::time::sleep(tokio::time::Duration::from_millis(1)).await; // simulate actuation time
+        }
+    });
+
     // Thread 1: Simulate arm
-    let _ = tokio::spawn(consume_sensor_data(channel.clone(), lat_tx)).await;
+    let _ = tokio::spawn(consume_sensor_data(
+        channel.clone(),
+        lat_tx,
+        shoulder_tx,
+        elbow_tx,
+    ))
+    .await;
 }
 
 async fn create_channel() -> Channel {
@@ -54,7 +80,12 @@ async fn create_channel() -> Channel {
     channel
 }
 
-async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u128>) {
+async fn consume_sensor_data(
+    channel: Channel,
+    lat_tx: mpsc::UnboundedSender<u128>,
+    shoulder_tx: mpsc::UnboundedSender<ShoulderData>,
+    elbow_tx: mpsc::UnboundedSender<ElbowData>,
+) {
     let mut consumer: Consumer = channel
         .basic_consume(
             "sensor_data",
@@ -97,10 +128,9 @@ async fn consume_sensor_data(channel: Channel, lat_tx: mpsc::UnboundedSender<u12
         };
 
         total_msgs += 1;
-        // lat_tx
-        //     .send(sensor_data.timestamp)
-        //     .await
-        //     .expect("Failed to send receive time for latency calculation");
+        lat_tx
+            .send(sensor_data.timestamp)
+            .expect("Failed to send receive time for latency calculation");
         let receive_time = now_micros();
 
         // Process and send response
@@ -180,22 +210,20 @@ async fn control_arm(
     data.wrist.wrist_x = wrist_x;
     data.wrist.wrist_y = wrist_y;
 
-    // Timestamp when computation ends
-    let compute_done_time = now_micros();
+    let _ = shoulder_tx.send(ShoulderData {
+        shoulder_x: shoulder_x,
+        shoulder_y: shoulder_y,
+    });
+    let _ = elbow_tx.send(ElbowData {
+        elbow_x: elbow_x,
+        elbow_y: elbow_y,
+    });
 
-    data.timestamp = compute_done_time;
+    let compute_done_time = now_micros();
 
     // Internal latency: time spent from receiving to finishing computation
     let internal_latency = compute_done_time.saturating_sub(receive_time);
-    println!(
-        ">> Internal actuator processing latency: {} µs",
-        internal_latency
-    );
-
-    println!(
-        "Arm moved to catch object at target (x={}, y={}) with elbow at ({:.2}, {:.2}) and wrist at ({:.2}, {:.2})",
-        target_x, target_y, elbow_x, elbow_y, wrist_x, wrist_y
-    );
+    println!("> Actuator process latency: {} µs", internal_latency);
 
     send_feedback(channel, data, cycle_start_time).await;
 }
@@ -234,6 +262,6 @@ async fn start_latency(mut lat_rx: mpsc::UnboundedReceiver<u128>) {
     while let Some(sent_timestamp) = lat_rx.recv().await {
         let now = now_micros();
         let latency = now.saturating_sub(sent_timestamp);
-        println!("Latency: {} µs", latency);
+        println!("Reception Latency: {} µs", latency);
     }
 }

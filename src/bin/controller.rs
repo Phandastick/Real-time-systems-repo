@@ -1,15 +1,23 @@
-use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
-use rand::random;
-use serde_json;
 use std::{
-    sync::{atomic::{AtomicUsize, Ordering}, Arc},
+    sync::{
+        Arc,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use Real_time_systems_repo::data_structure::*;
+
 use futures_util::stream::StreamExt;
-use tokio::sync::mpsc;
-use tokio::sync::Notify;
-use tokio::sync::Mutex;
+use lapin::{
+    options::*,
+    types::FieldTable,
+    Connection,
+    ConnectionProperties,
+};
+use rand::random;
+use serde_json;
+use tokio::sync::{mpsc, Mutex, Notify};
+
+use Real_time_systems_repo::data_structure::*;
+
 
 fn now_micros() -> u128 {
     SystemTime::now()
@@ -46,6 +54,8 @@ fn generate_anomalous_object_data() -> ObjectData {
 }
 
 async fn generate_sensor_data(cycle: u64, shared_feedback: Arc<Mutex<Option<FeedbackData>>>) -> SensorArmData {
+    //test latency before criterion
+    let start = now_micros();
     let object_data = if cycle % 10 == 0 {
         // Every 10th cycle, simulate an anomaly (like hand)
         generate_anomalous_object_data()
@@ -110,6 +120,7 @@ async fn generate_sensor_data(cycle: u64, shared_feedback: Arc<Mutex<Option<Feed
         //this models the upper arm segment
         sensor_data.elbow.elbow_x = sensor_data.joints.shoulder_x + l1 * theta1.cos();
         sensor_data.elbow.elbow_y = sensor_data.joints.shoulder_y + l1 * theta1.sin();
+        sensor_data.elbow.elbow_y = sensor_data.elbow.elbow_x.clamp(0.0, 7.0);
         sensor_data.elbow.elbow_y = sensor_data.elbow.elbow_y.clamp(-1.5, 1.5); // constrain y range
 
         //wrist is the end of the forearm, which bends at the elbow
@@ -134,11 +145,13 @@ async fn generate_sensor_data(cycle: u64, shared_feedback: Arc<Mutex<Option<Feed
     sensor_data.arm_strength = sensor_data.arm_velocity * sensor_data.object_data.object_mass;
     sensor_data.object_data.object_height = sensor_data.joints.shoulder_y + l1 * theta1.sin() + l2 * (theta1 + theta2).sin();
     sensor_data.timestamp = now_micros();  
-      
+    let latency = now_micros() - start;
+    println!("Sensor data generated in {} µs", latency);
     sensor_data
 }
 
 fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmData, bool) {
+    let start = now_micros();
     let mut filtered = raw.clone();
 
     // Filter joint data
@@ -174,12 +187,13 @@ fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmD
         || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
         || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
         || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
-
+    let latency = now_micros() - start;
+    println!("Sensor data processed in {} µs", latency);
     (filtered, anomaly)
 }
 
 
-async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Option<FeedbackData>>>) {
+async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Option<FeedbackData>>>, ready_notify: Arc<Notify>) {
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await.expect("Connection error");
     let channel = conn.create_channel().await.expect("Channel creation error");
@@ -198,7 +212,7 @@ async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Opti
     ).await.expect("Basic consume error");
 
     println!("> Feedback consumer ready...");
-
+    ready_notify.notify_waiters();
     loop {
         tokio::select! {
             maybe_delivery = consumer.next() => {
@@ -206,6 +220,9 @@ async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Opti
                     let payload = &delivery.data;
                     if let Ok(feedback) = serde_json::from_slice::<FeedbackData>(payload) {
                         println!("Received feedback: {:?}", feedback);
+                        //latency from feedback timestamp to now, measuring how long it took to send data and receive from controller end
+                        let latency = now_micros() - feedback.timestamp;
+                        println!("Reception latency: {} µs", latency);
                         let mut shared = shared_feedback.lock().await;
                         *shared = Some(feedback);
                     }
@@ -225,7 +242,7 @@ async fn consume_feedback(shutdown: Arc<Notify>, shared_feedback: Arc<Mutex<Opti
 #[tokio::main]
 async fn main() {
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 10_000u64;
+    let max_cycles = 25u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
@@ -237,14 +254,18 @@ async fn main() {
     let shared_feedback = Arc::new(Mutex::new(None::<FeedbackData>));
     let shared_feedback_for_feedback = Arc::clone(&shared_feedback);
     let shared_feedback_for_sensor = Arc::clone(&shared_feedback);
+    let feedback_ready_notify = Arc::new(Notify::new());
+    let feedback_ready_notify_for_consumer = Arc::clone(&feedback_ready_notify);
 
     let feedback_handle = tokio::spawn(async move {
-        consume_feedback(feedback_shutdown_consumer, shared_feedback_for_feedback).await;
+        consume_feedback(feedback_shutdown_consumer, shared_feedback_for_feedback, feedback_ready_notify).await;
     });
 
+    // Wait for feedback consumer to be ready
+    feedback_ready_notify_for_consumer.notified().await;
     // sensor generation task using tokio interval
     let sensor_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval = tokio::time::interval(Duration::from_millis(5));
 
         // inside sensor_task
         loop {
@@ -252,8 +273,7 @@ async fn main() {
 
             let mut c = cycle_clone.lock().await;
             if *c > max_cycles {
-                // do NOT notify shutdown here!
-                break; // just break to finish task cleanly
+                break; 
             }
 
             let current_cycle = *c;
