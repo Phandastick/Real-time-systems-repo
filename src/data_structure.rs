@@ -182,6 +182,13 @@ impl MovingAverage {
         self.index = (self.index + 1) % WINDOW_SIZE;
         self.sum / self.count as f32
     }
+
+    pub fn reset(&mut self) {
+        self.buffer = [0.0; WINDOW_SIZE];
+        self.index = 0;
+        self.sum = 0.0;
+        self.count = 0;
+    }
 }
 
 #[derive(Clone)]
@@ -218,5 +225,21 @@ impl Filters {
             object_y_filter: MovingAverage::new(),
             object_height_filter: MovingAverage::new(),
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.wrist_x_filter.reset();
+        self.wrist_y_filter.reset();
+        self.shoulder_x_filter.reset();
+        self.shoulder_y_filter.reset();
+        self.elbow_x_filter.reset();
+        self.elbow_y_filter.reset();
+        self.arm_velocity_filter.reset();
+        self.object_velocity_filter.reset();
+        self.object_mass_filter.reset();
+        self.object_size_filter.reset();
+        self.object_x_filter.reset();
+        self.object_y_filter.reset();
+        self.object_height_filter.reset();
     }
 }
