@@ -86,11 +86,33 @@ impl SensorArmData {
     }
 }
 impl SensorArmData {
-    pub fn to_feedback(&self) -> FeedbackData {
+    pub fn to_feedback(&self, eta: u128) -> FeedbackData {
         FeedbackData {
             wrist: self.wrist.clone(),
             joints: self.joints.clone(),
             elbow: self.elbow.clone(),
+            arrived_at_ground: eta,
+            timestamp: now_micros(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ActuatorInstruction {
+    pub x: f32,
+    pub y: f32,
+    pub strength: f32,
+    pub time_to_reach: u128,
+    pub timestamp: u128,
+}
+
+impl ActuatorInstruction {
+    pub fn new(x: f32, y: f32, strength: f32, time_to_reach: u128) -> Self {
+        ActuatorInstruction {
+            x,
+            y,
+            strength,
+            time_to_reach,
             timestamp: now_micros(),
         }
     }
@@ -101,6 +123,8 @@ pub struct FeedbackData {
     pub wrist: WristData,
     pub joints: ShoulderData,
     pub elbow: ElbowData,
+    pub arrived_at_ground: u128,
+
     pub timestamp: u128,
 }
 
@@ -158,15 +182,7 @@ impl MovingAverage {
         self.index = (self.index + 1) % WINDOW_SIZE;
         self.sum / self.count as f32
     }
-
-    pub fn reset(&mut self) {
-        self.buffer = [0.0; WINDOW_SIZE];
-        self.index = 0;
-        self.sum = 0.0;
-        self.count = 0;
-    }
 }
-
 
 #[derive(Clone)]
 pub struct Filters {
@@ -203,21 +219,4 @@ impl Filters {
             object_height_filter: MovingAverage::new(),
         }
     }
-
-    pub fn reset(&mut self) {
-        self.wrist_x_filter.reset();
-        self.wrist_y_filter.reset();
-        self.shoulder_x_filter.reset();
-        self.shoulder_y_filter.reset();
-        self.elbow_x_filter.reset();
-        self.elbow_y_filter.reset();
-        self.arm_velocity_filter.reset();
-        self.object_velocity_filter.reset();
-        self.object_mass_filter.reset();
-        self.object_size_filter.reset();
-        self.object_x_filter.reset();
-        self.object_y_filter.reset();
-        self.object_height_filter.reset();
-    }
 }
-
