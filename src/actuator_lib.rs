@@ -1,8 +1,4 @@
-use std::thread::sleep;
-use std::time::Duration;
-
-// ![#[allow(unused)]
-use crate::data_structure::{ElbowData, ObjectData, SensorArmData, ShoulderData, WristData};
+use crate::data_structure::SensorArmData;
 
 /// Computes the joint positions given the input sensor data.
 /// Returns the modified `SensorArmData` and the time taken in microseconds.
@@ -56,28 +52,5 @@ pub fn compute_arm_movement(mut data: SensorArmData) -> SensorArmData {
     data.wrist.wrist_x = wrist_x;
     data.wrist.wrist_y = wrist_y;
 
-    shoulder_movement(data.joints.clone());
-    elbow_movement(data.elbow.clone());
-
     data
-}
-
-//SPAWN SHOULDER JOINT, ELBOW JOINT THREADS and CHANNEL
-// shoudler thread
-fn shoulder_movement(data: ShoulderData) {
-    println!(
-        "[SHOULDER] Moving to position x:{:?} y:{:?}",
-        data.shoulder_x, data.shoulder_y
-    );
-
-    // sleep(Duration::from_millis(1));
-}
-
-//elbow thread
-fn elbow_movement(data: ElbowData) {
-    println!(
-        "[ELBOW] Moving to position x:{:?} y:{:?}",
-        data.elbow_x, data.elbow_y
-    );
-    // sleep(Duration::from_millis(1));
 }

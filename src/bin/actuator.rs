@@ -130,7 +130,7 @@ async fn consume_sensor_data(
         lat_tx
             .send(sensor_data.timestamp)
             .expect("Failed to send receive time for latency calculation");
-        let receive_time: u128 = now_micros();
+        let receive_time = now_micros();
 
         // Process and send response
         control_arm(
