@@ -10,6 +10,10 @@ criterion = { version = "0.6.0", features = ["async"] }
 name = "actuator_transmission_bench"
 harness = false
 
+[[bench]]
+name = "controller_benches"
+harness = false
+
 [dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
 get_user_input = "0.1.1"
