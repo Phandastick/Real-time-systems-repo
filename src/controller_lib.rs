@@ -12,6 +12,7 @@ use lapin::{
     Connection,
     ConnectionProperties,
 };
+use serde::Serialize;
 use serde_json;
 use tokio::sync::{mpsc, Mutex, Notify};
 use fastrand;
@@ -165,47 +166,105 @@ pub async fn generate_sensor_data(
     sensor_data
 }
 
+pub async fn publish<T>(
+    channel: &lapin::Channel,
+    data: &T,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    T: Serialize,
+{
+    let payload = serde_json::to_vec(data)?;
+    channel
+        .basic_publish(
+            "",
+            "sensor_data",
+            BasicPublishOptions::default(),
+            &payload,
+            Default::default(),
+        )
+        .await?;
+        // .await
+    Ok(())
+}
 
-pub fn process_sensor_data(raw: SensorArmData, filters: &mut Filters) -> (SensorArmData, bool) {
-    let start = now_micros();
-    let mut filtered = raw.clone();
+pub fn process_sensor_data(mut raw: SensorArmData, filters: &mut Filters) -> (SensorArmData, bool) {
+    // let start = now_micros();
+    // let mut filtered = raw.clone();
+    // destructure to reduce deep field access
+    let wrist = &mut raw.wrist;
+    let joints = &mut raw.joints;
+    let elbow = &mut raw.elbow;
+    let obj = &mut raw.object_data;
 
-    // Filter joint data
-    filtered.wrist.wrist_x = filters.wrist_x_filter.update(raw.wrist.wrist_x);
-    filtered.wrist.wrist_y = filters.wrist_y_filter.update(raw.wrist.wrist_y);
-    filtered.joints.shoulder_x = filters.shoulder_x_filter.update(raw.joints.shoulder_x);
-    filtered.joints.shoulder_y = filters.shoulder_y_filter.update(raw.joints.shoulder_y);
-    filtered.elbow.elbow_x = filters.elbow_x_filter.update(raw.elbow.elbow_x);
-    filtered.elbow.elbow_y = filters.elbow_y_filter.update(raw.elbow.elbow_y);
+    // Apply filters
+    wrist.wrist_x = filters.wrist_x_filter.update(wrist.wrist_x);
+    wrist.wrist_y = filters.wrist_y_filter.update(wrist.wrist_y);
+    joints.shoulder_x = filters.shoulder_x_filter.update(joints.shoulder_x);
+    joints.shoulder_y = filters.shoulder_y_filter.update(joints.shoulder_y);
+    elbow.elbow_x = filters.elbow_x_filter.update(elbow.elbow_x);
+    elbow.elbow_y = filters.elbow_y_filter.update(elbow.elbow_y);
 
-    // Filter arm velocity
-    filtered.arm_velocity = filters.arm_velocity_filter.update(raw.arm_velocity);
+    raw.arm_velocity = filters.arm_velocity_filter.update(raw.arm_velocity);
 
-    // Filter object data fields
-    filtered.object_data.object_x = filters.object_x_filter.update(raw.object_data.object_x);
-    filtered.object_data.object_y = filters.object_y_filter.update(raw.object_data.object_y);
-    filtered.object_data.object_mass = filters.object_mass_filter.update(raw.object_data.object_mass);
-    filtered.object_data.object_size = filters.object_size_filter.update(raw.object_data.object_size);
-    filtered.object_data.object_velocity = filters.object_velocity_filter.update(raw.object_data.object_velocity);
-    filtered.object_data.object_height = filters.object_height_filter.update(raw.object_data.object_height);
+    obj.object_x = filters.object_x_filter.update(obj.object_x);
+    obj.object_y = filters.object_y_filter.update(obj.object_y);
+    obj.object_mass = filters.object_mass_filter.update(obj.object_mass);
+    obj.object_size = filters.object_size_filter.update(obj.object_size);
+    obj.object_velocity = filters.object_velocity_filter.update(obj.object_velocity);
+    obj.object_height = filters.object_height_filter.update(obj.object_height);
 
-    // Calculate arm strength after filtering
-    filtered.arm_strength = filtered.arm_velocity * filtered.object_data.object_mass;
+    // Recalculate derived metric
+    raw.arm_strength = raw.arm_velocity * obj.object_mass;
+    // // Filter joint data
+    // filtered.wrist.wrist_x = filters.wrist_x_filter.update(raw.wrist.wrist_x);
+    // filtered.wrist.wrist_y = filters.wrist_y_filter.update(raw.wrist.wrist_y);
+    // filtered.joints.shoulder_x = filters.shoulder_x_filter.update(raw.joints.shoulder_x);
+    // filtered.joints.shoulder_y = filters.shoulder_y_filter.update(raw.joints.shoulder_y);
+    // filtered.elbow.elbow_x = filters.elbow_x_filter.update(raw.elbow.elbow_x);
+    // filtered.elbow.elbow_y = filters.elbow_y_filter.update(raw.elbow.elbow_y);
+
+    // // Filter arm velocity
+    // filtered.arm_velocity = filters.arm_velocity_filter.update(raw.arm_velocity);
+
+    // // Filter object data fields
+    // filtered.object_data.object_x = filters.object_x_filter.update(raw.object_data.object_x);
+    // filtered.object_data.object_y = filters.object_y_filter.update(raw.object_data.object_y);
+    // filtered.object_data.object_mass = filters.object_mass_filter.update(raw.object_data.object_mass);
+    // filtered.object_data.object_size = filters.object_size_filter.update(raw.object_data.object_size);
+    // filtered.object_data.object_velocity = filters.object_velocity_filter.update(raw.object_data.object_velocity);
+    // filtered.object_data.object_height = filters.object_height_filter.update(raw.object_data.object_height);
+
+    // // Calculate arm strength after filtering
+    // filtered.arm_strength = filtered.arm_velocity * filtered.object_data.object_mass;
 
     // Anomaly detection thresholds
-    let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 50.0)
-        || detect_anomaly(filtered.wrist.wrist_x, 0.0, 7.0)
-        || detect_anomaly(filtered.wrist.wrist_y, -7.0, 7.0)
-        || detect_anomaly(filtered.joints.shoulder_x, 0.0, 7.0)
-        || detect_anomaly(filtered.joints.shoulder_y, -7.0, 7.0)
-        || detect_anomaly(filtered.elbow.elbow_x, 0.0, 7.0)
-        || detect_anomaly(filtered.elbow.elbow_y, -7.0, 7.0)
-        || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
-        || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
-        || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
-    let latency = now_micros() - start;
-    println!("Sensor data processed in {} µs", latency);
-    (filtered, anomaly)
+    let values = [
+        (raw.arm_strength, 0.0, 50.0),
+        (wrist.wrist_x, 0.0, 7.0),
+        (wrist.wrist_y, -7.0, 7.0),
+        (joints.shoulder_x, 0.0, 7.0),
+        (joints.shoulder_y, -7.0, 7.0),
+        (elbow.elbow_x, 0.0, 7.0),
+        (elbow.elbow_y, -7.0, 7.0),
+        (obj.object_mass, 1.0, 5.0),
+        (obj.object_size, 4.0, 5.0),
+        (obj.object_velocity, 9.8, 11.8),
+    ];
+
+    let anomaly = values.iter().any(|(v, min, max)| detect_anomaly(*v, *min, *max));
+    // let anomaly = detect_anomaly(filtered.arm_strength, 0.0, 50.0)
+    //     || detect_anomaly(filtered.wrist.wrist_x, 0.0, 7.0)
+    //     || detect_anomaly(filtered.wrist.wrist_y, -7.0, 7.0)
+    //     || detect_anomaly(filtered.joints.shoulder_x, 0.0, 7.0)
+    //     || detect_anomaly(filtered.joints.shoulder_y, -7.0, 7.0)
+    //     || detect_anomaly(filtered.elbow.elbow_x, 0.0, 7.0)
+    //     || detect_anomaly(filtered.elbow.elbow_y, -7.0, 7.0)
+    //     || detect_anomaly(filtered.object_data.object_mass, 1.0, 5.0)             // extra mass
+    //     || detect_anomaly(filtered.object_data.object_size, 4.0, 5.0)             // unusual size
+    //     || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
+    // let latency = now_micros() - start;
+    // println!("Sensor data processed in {} µs", latency);
+    (raw, anomaly)
 }
 
 
