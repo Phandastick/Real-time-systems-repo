@@ -1,8 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
+use tokio::sync::mpsc;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::{runtime::Runtime, sync::Mutex};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use Real_time_systems_repo::controller_lib::{
     generate_sensor_data,
@@ -10,20 +11,89 @@ use Real_time_systems_repo::controller_lib::{
     detect_anomaly,
     generate_anomalous_object_data,
 };
-use Real_time_systems_repo::data_structure::{FeedbackData, Filters,};
+use Real_time_systems_repo::data_structure::{FeedbackData, Filters};
+use lapin::{
+    options::{BasicPublishOptions, QueueDeclareOptions},
+    types::FieldTable,
+    BasicProperties, Channel, Connection, ConnectionProperties,
+};
+use serde::{Serialize, Deserialize};
 
-fn bench_generate_sensor_data(c: &mut Criterion) {
+//no blackbox
+// fn bench_generate_sensor_data(c: &mut Criterion) {
+//     let rt = Runtime::new().unwrap();
+
+//     c.bench_function("generate_sensor_data_noblackbox", |b| {
+//         let shared_feedback = Arc::new(Mutex::new(None));
+//         b.to_async(&rt).iter_custom(|iters| {
+//             let shared_feedback = shared_feedback.clone();
+//             async move {
+//                 let start = std::time::Instant::now();
+//                 for _ in 0..iters {
+//                     // Direct call without black_box
+//                     let _ = generate_sensor_data(10, shared_feedback.clone()).await;
+//                 }
+//                 start.elapsed()
+//             }
+//         });
+//     });
+// }
+async fn publish<T>(
+    channel: &lapin::Channel,
+    data: &T,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    T: Serialize,
+{
+    let payload = serde_json::to_vec(data)?;
+    channel
+        .basic_publish(
+            "",
+            "sensor_data",
+            BasicPublishOptions::default(),
+            &payload,
+            Default::default(),
+        )
+        .await?;
+        // .await
+    Ok(())
+}
+
+fn bench_send_sensor_data(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    c.bench_function("generate_sensor_data", |b| {
+
+    c.bench_function("sensor_to_rabbitMQ_sending", |b| {
         let shared_feedback = Arc::new(Mutex::new(None));
+
         b.to_async(&rt).iter_custom(|iters| {
             let shared_feedback = shared_feedback.clone();
+
             async move {
-                let start = std::time::Instant::now();
+                // Establish connection and declare queue once outside loop
+                let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
+                    .await
+                    .expect("Connection error");
+                let channel = conn.create_channel().await.expect("Channel creation error");
+                channel.queue_declare(
+                    "sensor_data",
+                    QueueDeclareOptions::default(),
+                    FieldTable::default(),
+                )
+                .await
+                .expect("Queue declaration error");
+                
+                
+                // Generate sensor data
+                let result = generate_sensor_data(black_box(10), shared_feedback.clone()).await;
+                black_box(&result);
+                let start = Instant::now();
+                //loop starts here
                 for _ in 0..iters {
-                    let result = generate_sensor_data(black_box(10), shared_feedback.clone()).await;
-                    black_box(result);
+                    // Publish to RabbitMQ once per iteration
+                    publish(&channel, &result).await.expect("Failed to publish");
+                    black_box(&result);
                 }
+
                 start.elapsed()
             }
         });
@@ -74,11 +144,16 @@ fn bench_generate_sensor_data(c: &mut Criterion) {
 //     });
 // }
 
+// criterion_group!(
+//     benches,
+//     bench_generate_sensor_data,
+//     // bench_process_sensor_data,
+//     // bench_detect_anomaly,
+//     // bench_generate_anomalous_object_data
+// );
+// criterion_main!(benches);
 criterion_group!(
     benches,
-    bench_generate_sensor_data,
-    // bench_process_sensor_data,
-    // bench_detect_anomaly,
-    // bench_generate_anomalous_object_data
+    bench_send_sensor_data,
 );
 criterion_main!(benches);

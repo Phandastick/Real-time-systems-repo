@@ -6,6 +6,7 @@ use std::{
 use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use rand::random;
+use serde::Serialize;
 use serde_json;
 use tokio::sync::{mpsc, Mutex, Notify};
 use fastrand;
@@ -264,6 +265,26 @@ async fn consume_feedback(
     }
 }
 
+async fn publish<T>(
+    channel: &lapin::Channel,
+    data: &T,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    T: Serialize,
+{
+    let payload = serde_json::to_vec(data)?;
+    channel
+        .basic_publish(
+            "",
+            "sensor_data",
+            BasicPublishOptions::default(),
+            &payload,
+            Default::default(),
+        )
+        .await?
+        .await?; // confirmation
+    Ok(())
+}
 #[tokio::main]
 async fn main() {
     let cycle = Arc::new(Mutex::new(1u64));
@@ -334,12 +355,11 @@ async fn main() {
             }
         }
     });
-
+    //send data
     let publisher_handle = tokio::spawn(async move {
-        let conn =
-            Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
-                .await
-                .expect("Connection error");
+        let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
+            .await
+            .expect("Connection error");
         let channel = conn.create_channel().await.expect("Channel creation error");
 
         channel
@@ -352,23 +372,10 @@ async fn main() {
             .expect("Queue declaration error");
 
         while let Some(processed_data) = rx_processed.recv().await {
-            let payload = serde_json::to_vec(&processed_data).expect("Serialization failed");
-
-            channel
-                .basic_publish(
-                    "",
-                    "sensor_data",
-                    BasicPublishOptions::default(),
-                    &payload,
-                    Default::default(),
-                )
-                .await
-                .expect("Publish failed")
-                .await
-                .expect("Confirmation failed");
+            if let Err(e) = publish(&channel, &processed_data).await {
+                eprintln!("Publish failed: {:?}", e);
+            }
         }
-
-        println!("Publisher exiting cleanly.");
     });
 
     sensor_task.await.expect("Sensor task panicked");
