@@ -243,6 +243,8 @@ async fn consume_feedback(
     shared_feedback: Arc<Mutex<Option<FeedbackData>>>,
     ready_notify: Arc<Notify>,
 ) {
+    let mut total_latency: u128 = 0;
+    let mut message_count: u64 = 0;
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -278,6 +280,8 @@ async fn consume_feedback(
                         println!("Received feedback: {:?}", feedback);
                         //latency from feedback timestamp to now, measuring how long it took to send data and receive from controller end
                         let latency = now_micros() - feedback.timestamp;
+                        total_latency += latency;
+                        message_count += 1;
                         println!("Reception latency: {} µs", latency);
                         let mut shared = shared_feedback.lock().await;
                         *shared = Some(feedback);
@@ -287,12 +291,18 @@ async fn consume_feedback(
                     break;
                 }
             }
+            
             _ = shutdown.notified() => {
                 println!("Feedback consumer received shutdown signal.");
                 break;
             }
         }
     }
+    let avg_latency_ms = total_latency as f64 / message_count as f64;
+    println!(
+        "Processed {} messages. Average reception latency: {:.3} µs",
+         message_count, avg_latency_ms
+    );
 }
 //publish method to send processed sensor data to RabbitMQ
 async fn publish<T>(
