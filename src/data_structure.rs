@@ -6,6 +6,7 @@ pub fn now_micros() -> u128 {
         .as_micros()
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+//to simulate sensor arm data
 pub struct SensorArmData {
     pub object_data: ObjectData,
 
@@ -19,7 +20,7 @@ pub struct SensorArmData {
 
     pub timestamp: u128,
 }
-
+//simulate object data
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectData {
     pub object_velocity: f32,
@@ -31,6 +32,7 @@ pub struct ObjectData {
 }
 
 //stored in sensor
+//overall data struct in arm
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WristData {
     pub wrist_x: f32,
@@ -79,12 +81,13 @@ impl SensorArmData {
         }
     }
 }
-
+//update object data in sensor arm
 impl SensorArmData {
     pub fn update_object_data(&mut self, object_data: ObjectData) {
         self.object_data = object_data;
     }
 }
+//convert sensor arm data to feedback data
 impl SensorArmData {
     pub fn to_feedback(&self, eta: u128) -> FeedbackData {
         FeedbackData {
@@ -118,6 +121,10 @@ impl ActuatorInstruction {
     }
 }
 
+//store feedback data from actuator to sensor
+//this is the data that the sensor will use to update its state
+//does not have object data, as it is not needed for the feedback
+//as long as the arm data has been returned, the object can be deemed caught
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FeedbackData {
     pub wrist: WristData,
@@ -127,7 +134,7 @@ pub struct FeedbackData {
 
     pub timestamp: u128,
 }
-
+//function to get feedback data from sensor arm data
 impl SensorArmData {
     pub fn from_feedback(feedback: FeedbackData) -> Self {
         SensorArmData {
@@ -152,7 +159,7 @@ impl SensorArmData {
 
 //controller specific struct
 pub const WINDOW_SIZE: usize = 5;
-
+//a simple moving average filter with a fixed window size
 #[derive(Debug, Clone)]
 pub struct MovingAverage {
     pub buffer: [f32; WINDOW_SIZE],
@@ -242,4 +249,10 @@ impl Filters {
         self.object_y_filter.reset();
         self.object_height_filter.reset();
     }
+}
+//to track latency in the system of high/normal load
+#[derive(Debug)]
+pub struct LogEntry {
+    pub task: String,
+    pub latency: u128, // microseconds
 }

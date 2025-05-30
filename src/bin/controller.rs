@@ -7,9 +7,28 @@ use futures_util::stream::StreamExt;
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 use serde::Serialize;
 use serde_json;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::{sync::{mpsc, Mutex, Notify}, time::Instant, };
 use fastrand;
 use Real_time_systems_repo::data_structure::*;
+use std::fs::OpenOptions;
+use std::io::Write;
+
+pub async fn start_csv_logger(mut rx: mpsc::Receiver<LogEntry>, file_path: &str) {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)
+        .expect("Failed to open CSV log file");
+
+    // Write header if file is new
+    if file.metadata().unwrap().len() == 0 {
+        writeln!(file, "task,latency_µs").expect("Failed to write header");
+    }
+
+    while let Some(entry) = rx.recv().await {
+        writeln!(file, "{},{}", entry.task, entry.latency).expect("Failed to write to CSV");
+    }
+}
 
 fn now_micros() -> u128 {
     SystemTime::now()
@@ -79,10 +98,11 @@ fn branchless_clamp(val: f32, min: f32, max: f32) -> f32 {
 
 pub async fn generate_sensor_data(
     cycle: u64,
-    shared_feedback: Arc<Mutex<Option<FeedbackData>>>
+    shared_feedback: Arc<Mutex<Option<FeedbackData>>>,
+    log_sender: mpsc::Sender<LogEntry>,
 ) -> SensorArmData {
-    // Use fastrand directly to generate variables below
 
+    let start = Instant::now();
     let object_data = if cycle % 10 == 0 {
         // Every 10th cycle, simulate an anomaly (like hand)
         generate_anomalous_object_data()
@@ -154,11 +174,22 @@ pub async fn generate_sensor_data(
     sensor_data.arm_strength = sensor_data.arm_velocity * sensor_data.object_data.object_mass;
     sensor_data.object_data.object_height = sensor_data.joints.shoulder_y + l1 * theta1.sin() + l2 * (theta1 + theta2).sin();
     sensor_data.timestamp = now_micros();
-
+    let duration = start.elapsed().as_micros();
+    if let Err(e) = log_sender.send(LogEntry {
+        task: "generate_sensor_data".to_string(),
+        latency: duration,
+            }).await {
+                eprintln!("Failed to log latency: {}", e);
+            }
     sensor_data
 }
 
-pub fn process_sensor_data(mut raw: SensorArmData, filters: &mut Filters) -> (SensorArmData, bool) {
+pub async fn process_sensor_data(
+    mut raw: SensorArmData, 
+    filters: &mut Filters, 
+    log_sender: mpsc::Sender<LogEntry>
+) -> (SensorArmData, bool) {
+    let start = Instant::now();
     // let start = now_micros();
     // let mut filtered = raw.clone();
     // destructure to reduce deep field access
@@ -235,6 +266,13 @@ pub fn process_sensor_data(mut raw: SensorArmData, filters: &mut Filters) -> (Se
     //     || detect_anomaly(filtered.object_data.object_velocity, 9.8, 11.8);       // non-moving object
     // let latency = now_micros() - start;
     // println!("Sensor data processed in {} µs", latency);
+    let duration = start.elapsed().as_micros();
+    if let Err(e) = log_sender.send(LogEntry {
+        task: "process_sensor_data".to_string(),
+        latency: duration,
+            }).await {
+                eprintln!("Failed to log latency: {}", e);
+            }
     (raw, anomaly)
 }
 
@@ -242,9 +280,10 @@ async fn consume_feedback(
     shutdown: Arc<Notify>,
     shared_feedback: Arc<Mutex<Option<FeedbackData>>>,
     ready_notify: Arc<Notify>,
+    log_sender: mpsc::Sender<LogEntry>,
 ) {
-    let mut total_latency: u128 = 0;
-    let mut message_count: u64 = 0;
+    // let mut total_latency: u128 = 0;
+    // let mut message_count: u64 = 0;
     let conn = Connection::connect("amqp://127.0.0.1:5672/%2f", ConnectionProperties::default())
         .await
         .expect("Connection error");
@@ -280,9 +319,17 @@ async fn consume_feedback(
                         println!("Received feedback: {:?}", feedback);
                         //latency from feedback timestamp to now, measuring how long it took to send data and receive from controller end
                         let latency = now_micros() - feedback.timestamp;
-                        total_latency += latency;
-                        message_count += 1;
-                        println!("Reception latency: {} µs", latency);
+                        // Send to logger
+                        if let Err(e) = log_sender.send(LogEntry {
+                            task: "consume_feedback".to_string(),
+                            latency,
+                        }).await {
+                            eprintln!("Failed to log latency: {}", e);
+                        }
+                        // total_latency += latency;
+                        // message_count += 1;
+                        // println!("Reception latency: {} µs", latency);
+                        
                         let mut shared = shared_feedback.lock().await;
                         *shared = Some(feedback);
                     }
@@ -298,20 +345,22 @@ async fn consume_feedback(
             }
         }
     }
-    let avg_latency_ms = total_latency as f64 / message_count as f64;
-    println!(
-        "Processed {} messages. Average reception latency: {:.3} µs",
-         message_count, avg_latency_ms
-    );
+    // let avg_latency_ms = total_latency as f64 / message_count as f64;
+    // println!(
+    //     "Processed {} messages. Average reception latency: {:.3} µs",
+    //      message_count, avg_latency_ms
+    // );
 }
 //publish method to send processed sensor data to RabbitMQ
 async fn publish<T>(
     channel: &lapin::Channel,
     data: &T,
+    log_sender: mpsc::Sender<LogEntry>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     T: Serialize,
-{
+{   
+    let start = Instant::now();
     let payload = serde_json::to_vec(data)?;
     channel
         .basic_publish(
@@ -323,13 +372,20 @@ where
         )
         .await?
         .await?; // confirmation
+        let duration = start.elapsed().as_micros();
+        if let Err(e) = log_sender.send(LogEntry {
+            task: "publish_data".to_string(),
+            latency: duration,
+        }).await {
+            eprintln!("Failed to log latency: {}", e);
+            }     
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
     let cycle = Arc::new(Mutex::new(1u64));
-    let max_cycles = 1000u64;
+    let max_cycles = 10000u64;
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
@@ -343,12 +399,18 @@ async fn main() {
     let shared_feedback_for_sensor = Arc::clone(&shared_feedback);
     let feedback_ready_notify = Arc::new(Notify::new());
     let feedback_ready_notify_for_consumer = Arc::clone(&feedback_ready_notify);
+    let (log_tx, log_rx) = mpsc::channel::<LogEntry>(100);
+    let log_tx_feedback = log_tx.clone();
+    let log_tx_publisher = log_tx.clone();
+    // Start the CSV logger in a separate task
+    tokio::spawn(start_csv_logger(log_rx, "performance_log_normal.csv"));
 
     let feedback_handle = tokio::spawn(async move {
         consume_feedback(
             feedback_shutdown_consumer,
             shared_feedback_for_feedback,
             feedback_ready_notify,
+            log_tx_feedback,
         )
         .await;
     });
@@ -371,9 +433,9 @@ async fn main() {
             let current_cycle = *c;
             *c += 1;
             let shared_feedback_clone = Arc::clone(&shared_feedback_for_sensor);
-            let data = generate_sensor_data(current_cycle, shared_feedback_clone).await;
+            let data = generate_sensor_data(current_cycle, shared_feedback_clone, log_tx.clone()).await;
             let mut filters = shared_filters_clone.lock().await;
-            let (processed, anomaly) = process_sensor_data(data, &mut filters);
+            let (processed, anomaly) = process_sensor_data(data, &mut filters, log_tx.clone()).await;
 
             if anomaly {
                 println!(
@@ -413,9 +475,10 @@ async fn main() {
             .expect("Queue declaration error");
 
         while let Some(processed_data) = rx_processed.recv().await {
-            if let Err(e) = publish(&channel, &processed_data).await {
+            if let Err(e) = publish(&channel, &processed_data, log_tx_publisher.clone()).await {
                 eprintln!("Publish failed: {:?}", e);
             }
+            // println!("Published sensor data in {} µs",duration);
         }
     });
 

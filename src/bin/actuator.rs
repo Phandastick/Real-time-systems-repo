@@ -147,9 +147,14 @@ async fn consume_sensor_data(
             }
         };
 
-        if (cycles < 500) {
+        if cycles < 500 {
+            println!("> Warming up, skipping cycle: {}", cycles);
+            delivery
+                .nack(Default::default())
+                .await
+                .expect("Failed to nack");
             continue; // skip first 500 cycles - warm up
-        }
+            }
 
         lat_tx
             .send(sensor_data.timestamp)

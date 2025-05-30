@@ -27,3 +27,4 @@ rand = "0.9.1"
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 scheduled-thread-pool = "0.2.7"
 fastrand = "2.3.0"
+csv = "1.0"

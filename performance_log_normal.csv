@@ -1,0 +1,7 @@
+Average of latency,Column Labels,,
+Row Labels,high,normal,Grand Total
+consume_feedback,949.758882,800.9571732,875.2173168
+generate_sensor_data,4.1524,6.2386,5.1955
+process_sensor_data,0.3,0.5197,0.40985
+publish_data,157.300704,182.0888022,169.7127315
+Grand Total,253.3086941,226.7160556,240.002071
