@@ -47,7 +47,12 @@ pub async fn start() {
         while let Some(pos) = shoulder_rx.recv().await {
             let start_time = now_micros();
             // println!("[SHOULDER] Moving to position: {:?}", pos);
-            tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            // tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            // println!(
+            //     "Shoulder execution time: {}, waiting time: {}",
+            //     now_micros().saturating_sub(start_time),
+            //     pos.time_to_reach
+            // );
             lat_shoulder_tx
                 .send(start_time)
                 .expect("Failed to send shoulder latency");
@@ -61,7 +66,12 @@ pub async fn start() {
         while let Some(pos) = elbow_rx.recv().await {
             let start_time = now_micros();
             // println!("[ELBOW] Moving to position: {:?}", pos);
-            tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            // tokio::time::sleep(tokio::time::Duration::from_micros(pos.time_to_reach)).await; // simulate actuation time
+            // println!(
+            //     "Shoulder execution time: {}, waiting time: {}",
+            //     now_micros().saturating_sub(start_time),
+            //     pos.time_to_reach
+            // );
             lat_elbow_tx
                 .send(start_time)
                 .expect("Failed to send shoulder latency");
@@ -154,6 +164,9 @@ async fn consume_sensor_data(
                 continue;
             }
         };
+        // println!("> Received sensor data: {:?}", sensor_data);
+        let reception_latency = now_micros().saturating_sub(sensor_data.timestamp);
+        println!("> Reception Latency: {} µs\n", reception_latency);
 
         if cycles < 500 {
             println!("> Warming up, skipping cycle: {}", cycles);
@@ -164,15 +177,12 @@ async fn consume_sensor_data(
             continue; // skip first 500 cycles - warm up
         }
 
-        lat_tx
-            .send(sensor_data.timestamp)
-            .expect("Failed to send receive time for latency calculation");
+        // lat_tx
+        //     .send(sensor_data.timestamp)
+        //     .expect("Failed to send receive time for latency calculation");
 
         // cycle starts after receiving data is done
         let cycle_start_time = now_micros();
-
-        // let reception_latency = now_micros().saturating_sub(sensor_data.timestamp);
-        // println!("> Reception Latency: {} µs", reception_latency);
 
         total_msgs += 1;
         println!("> Message count: {:?}", total_msgs);
