@@ -217,7 +217,6 @@ pub async fn process_sensor_data(
 
     // Recalculate derived metric
     raw.arm_strength = raw.arm_velocity * obj.object_mass;
-    //old implementation with commented out code
     // // Filter joint data
     // filtered.wrist.wrist_x = filters.wrist_x_filter.update(raw.wrist.wrist_x);
     // filtered.wrist.wrist_y = filters.wrist_y_filter.update(raw.wrist.wrist_y);
@@ -382,38 +381,30 @@ where
             }     
     Ok(())
 }
-//tokio main runtime
+
 #[tokio::main]
 async fn main() {
-    //varaible cycle is used to track the number of cycles
-    // it is used to stop the sensor task after a certain number of cycles
     let cycle = Arc::new(Mutex::new(1u64));
     let max_cycles = 10000u64;
-    //create shared filters and channels
     let shared_filters = Arc::new(Mutex::new(Filters::new()));
     let shared_filters_clone = Arc::clone(&shared_filters);
     let (tx_processed, mut rx_processed) = mpsc::channel::<SensorArmData>(100);
     let tx_blocking = tx_processed.clone();
     let cycle_clone = Arc::clone(&cycle);
     let shutdown_notify = Arc::new(Notify::new());
-    //create a shutdown notifier for feedback consumer
     let feedback_shutdown = Arc::new(Notify::new());
     let feedback_shutdown_consumer = Arc::clone(&feedback_shutdown);
-    //feedback data is shared between tasks
-    //iniialize shared feedback data
     let shared_feedback = Arc::new(Mutex::new(None::<FeedbackData>));
     let shared_feedback_for_feedback = Arc::clone(&shared_feedback);
     let shared_feedback_for_sensor = Arc::clone(&shared_feedback);
-    //tell main task when feedback consumer is ready
     let feedback_ready_notify = Arc::new(Notify::new());
     let feedback_ready_notify_for_consumer = Arc::clone(&feedback_ready_notify);
-    //channels for logging
     let (log_tx, log_rx) = mpsc::channel::<LogEntry>(100);
     let log_tx_feedback = log_tx.clone();
     let log_tx_publisher = log_tx.clone();
-    //start the CSV logger in a separate task
+    // Start the CSV logger in a separate task
     tokio::spawn(start_csv_logger(log_rx, "performance_log_normal.csv"));
-    //start feedback consumer task
+
     let feedback_handle = tokio::spawn(async move {
         consume_feedback(
             feedback_shutdown_consumer,
@@ -424,12 +415,13 @@ async fn main() {
         .await;
     });
 
-    //wait for feedback consumer to be ready
+    // Wait for feedback consumer to be ready
     feedback_ready_notify_for_consumer.notified().await;
-    //sensor generation task using tokio interval
+    // sensor generation task using tokio interval
     let sensor_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(5));
 
+        // inside sensor_task
         loop {
             interval.tick().await;
 
@@ -458,10 +450,10 @@ async fn main() {
                     current_cycle, processed.arm_strength, anomaly
                 );
 
-                //use .send().await to wait for channel capacity instead of try_send
+                // use .send().await to wait for channel capacity instead of try_send
                 if let Err(e) = tx_blocking.send(processed).await {
                     eprintln!("Failed to send processed data: {}", e);
-                    break; //if receiver dropped, break out
+                    break; // if receiver dropped, break out
                 }
             }
         }
@@ -492,14 +484,14 @@ async fn main() {
 
     sensor_task.await.expect("Sensor task panicked");
 
-    //after sensor task finishes, close channel by dropping sender
+    // after sensor task finishes, close channel by dropping sender
     drop(tx_processed);
 
-    //now notify shutdown so publisher and feedback consumer can stop
+    // now notify shutdown so publisher and feedback consumer can stop
     shutdown_notify.notify_waiters();
     feedback_shutdown.notify_waiters();
 
-    //wait for publisher and feedback consumer
+    // wait for publisher and feedback consumer
     publisher_handle.await.expect("Publisher panicked");
     feedback_handle.await.expect("Feedback panicked");
 

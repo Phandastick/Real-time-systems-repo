@@ -157,8 +157,7 @@ impl SensorArmData {
     }
 }
 
-//considers only the last 5 values
-//to smooth out the data
+//controller specific struct
 pub const WINDOW_SIZE: usize = 5;
 //a simple moving average filter with a fixed window size
 #[derive(Debug, Clone)]
@@ -178,12 +177,7 @@ impl MovingAverage {
             count: 0,
         }
     }
-//if the buffer isn't full yet (count < WINDOW_SIZE), it increments count
-//else it subtracts the oldest value from the running sum
-//it then adds the new value into the buffer at the current index
-//updates the sum and advances the circular index
-//returns the current average
-//O(1) time complexity for each update
+
     pub fn update(&mut self, val: f32) -> f32 {
         if self.count < WINDOW_SIZE {
             self.count += 1;
@@ -204,7 +198,6 @@ impl MovingAverage {
     }
 }
 
-//implement the movingaverage filter for sensorarm data
 #[derive(Clone)]
 pub struct Filters {
     pub wrist_x_filter: MovingAverage,
@@ -223,7 +216,6 @@ pub struct Filters {
 }
 
 impl Filters {
-    //create a new filters struct with all filters initialized
     pub fn new() -> Self {
         Self {
             wrist_x_filter: MovingAverage::new(),
@@ -241,7 +233,7 @@ impl Filters {
             object_height_filter: MovingAverage::new(),
         }
     }
-    //reset all filters
+
     pub fn reset(&mut self) {
         self.wrist_x_filter.reset();
         self.wrist_y_filter.reset();
@@ -259,8 +251,6 @@ impl Filters {
     }
 }
 //to track latency in the system of high/normal load
-//used to log the time taken for each task
-//better to use a struct for clarity
 #[derive(Debug)]
 pub struct LogEntry {
     pub task: String,
