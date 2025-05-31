@@ -23,6 +23,7 @@ pub async fn start() {
     let (lat_tx, lat_rx) = mpsc::unbounded_channel();
     let (lat_shoulder_tx, lat_shoulder_rx) = mpsc::unbounded_channel();
     let (lat_elbow_tx, lat_elbow_rx) = mpsc::unbounded_channel();
+    let (cycle_tx, cycle_rx) = mpsc::unbounded_channel();
     // channels for joint tasks
     let (shoulder_tx, mut shoulder_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
     let (elbow_tx, mut elbow_rx) = mpsc::unbounded_channel::<ActuatorInstruction>();
@@ -30,9 +31,14 @@ pub async fn start() {
     let sync_barrier = Arc::new(Barrier::new(2)); // Two parties: shoulder and elbow
 
     // Thread 2: Log latency
-    tokio::spawn(start_latency(lat_rx, lat_elbow_rx, lat_shoulder_rx))
-        .await
-        .expect("Failed to spawn latency thread");
+    tokio::spawn(start_latency(
+        lat_rx,
+        lat_elbow_rx,
+        lat_shoulder_rx,
+        cycle_rx,
+    ))
+    .await
+    .expect("Failed to spawn latency thread");
 
     //SPAWN SHOULDER JOINT, ELBOW JOINT THREADS and CHANNEL
     // shoudler thread
@@ -69,6 +75,7 @@ pub async fn start() {
         lat_tx,
         shoulder_tx,
         elbow_tx,
+        cycle_tx,
     ))
     .await;
 }
@@ -105,6 +112,7 @@ async fn consume_sensor_data(
     lat_tx: mpsc::UnboundedSender<u128>,
     shoulder_tx: mpsc::UnboundedSender<ActuatorInstruction>,
     elbow_tx: mpsc::UnboundedSender<ActuatorInstruction>,
+    cycle_tx: mpsc::UnboundedSender<u128>,
 ) {
     let mut consumer: Consumer = channel
         .basic_consume(
@@ -154,7 +162,7 @@ async fn consume_sensor_data(
                 .await
                 .expect("Failed to nack");
             continue; // skip first 500 cycles - warm up
-            }
+        }
 
         lat_tx
             .send(sensor_data.timestamp)
@@ -178,6 +186,7 @@ async fn consume_sensor_data(
             receive_time,
             &shoulder_tx,
             &elbow_tx,
+            &cycle_tx,
             cycle_start_time,
         )
         .await;
@@ -195,6 +204,7 @@ async fn control_arm(
     receive_time: u128,
     shoulder_tx: &mpsc::UnboundedSender<ActuatorInstruction>,
     elbow_tx: &mpsc::UnboundedSender<ActuatorInstruction>,
+    cycle_tx: &mpsc::UnboundedSender<u128>,
     cycle_start_time: u128,
 ) {
     // println!("Executing control for sensor data: {:?}", data);
@@ -286,7 +296,14 @@ async fn control_arm(
     // let internal_latency = compute_done_time.saturating_sub(receive_time);
     // println!("> Calculation process latency: {} µs", internal_latency);
 
-    send_feedback(channel, data, arrived_at_ground, cycle_start_time).await;
+    send_feedback(
+        channel,
+        data,
+        arrived_at_ground,
+        cycle_start_time,
+        &cycle_tx,
+    )
+    .await;
 }
 /// Simulates sending feedback from actuator to sensor.
 pub async fn send_feedback(
@@ -294,6 +311,7 @@ pub async fn send_feedback(
     mut data: SensorArmData,
     arrived_at_ground: u128,
     cycle_start_time: u128,
+    cycle_tx: &mpsc::UnboundedSender<u128>,
 ) {
     // log time done  for feedback AFTER actuator processing
     data.timestamp = now_micros();
@@ -315,17 +333,20 @@ pub async fn send_feedback(
         .await
         .expect("Failed to confirm feedback delivery");
 
-    // println!("> Sent feedback to sensor: {:?}", feedback.timestamp);
-    println!(
-        "> Cycle time: {} µs",
-        now_micros().saturating_sub(cycle_start_time)
-    );
+    // println!(
+    //     "> Cycle time: {} µs",
+    //     now_micros().saturating_sub(cycle_start_time)
+    // );
+    cycle_tx
+        .send(cycle_start_time)
+        .expect("Failed to send cycle time for latency calculation");
 }
 
 async fn start_latency(
     mut lat_rx: mpsc::UnboundedReceiver<u128>,
     mut lat_elbow_rx: mpsc::UnboundedReceiver<u128>,
     mut lat_shoulder_rx: mpsc::UnboundedReceiver<u128>,
+    mut lat_cycle_rx: mpsc::UnboundedReceiver<u128>,
 ) {
     println!("> Starting latency calculations...");
 
@@ -363,6 +384,31 @@ async fn start_latency(
                         .write_record(&[
                             now.to_string(),
                             "Data reception latency".to_string(),
+                            latency.to_string(),
+                        ])
+                        .unwrap();
+                    writer.flush().unwrap();
+                }
+            });
+        });
+    }
+
+    // Cycle latency logging
+    {
+        let writer = file.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+            rt.block_on(async move {
+                while let Some(sent_timestamp) = lat_cycle_rx.recv().await {
+                    let now = now_micros();
+                    let latency = now.saturating_sub(sent_timestamp);
+                    println!("Cycle Time: {} µs", latency);
+
+                    let mut writer = writer.lock().unwrap();
+                    writer
+                        .write_record(&[
+                            now.to_string(),
+                            "cycle time".to_string(),
                             latency.to_string(),
                         ])
                         .unwrap();
